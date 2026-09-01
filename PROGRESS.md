@@ -51,3 +51,41 @@ Newest phase at the bottom. Decisions are recorded so a later session can resume
 - `diff.py`, `sanitizer.py` (Phase 2); nodes/prompts/graph (Phase 3); eval suite (Phase 4).
 
 ---
+
+## Phase 2 — diff parsing and prompt-injection defence
+
+**Status:** complete
+
+### Done
+- `diff.py`: tolerant unified-diff parser -> `DiffHunk(file, start_line, added_lines)` with
+  **new-file** line numbers. Skips deleted files, binaries and lockfiles. `render_hunks()` is the
+  single producer of the `FILE:` / `<line>| <code>` prompt format.
+- `sanitizer.py`: 9 detection patterns + 2 structural unicode checks, homoglyph folding,
+  invisible-character stripping, inert-marker substitution, nonce-fenced wrapping,
+  `injection_finding()` -> blocker/security/`prompt-injection-in-diff`.
+- `eval/fixtures/injection.patch`: realistic PR carrying both a real vulnerability
+  (world-writable chmod, pickle of user input, path traversal) **and** an attack on the
+  reviewer. Trips 8 independent rules.
+- `tests/test_injection.py` (6 attacks x 3 assertions each, 3 benign inputs x 2, plus
+  neutralisation/nonce/attribution tests) and `tests/test_diff.py`.
+- 99 tests passing.
+
+### Decisions
+- **Detection runs on a normalised copy, never on what is sent to the model.** Homoglyphs are
+  folded and zero-width characters stripped *before* the pattern scan, so `іgnore` (Cyrillic і)
+  and `ign​ore` are both caught by the plain-English pattern. The unicode trick is *also*
+  reported in its own right.
+- **Homoglyph detection is scoped to words mixing Latin with Cyrillic/Greek.** An all-Cyrillic
+  comment and accented Latin (`café`) are legitimate and must not fire. Tested both ways.
+- **Neutralisation replaces the matched span with `[NEUTRALISED:<rule>]` rather than deleting the
+  line.** The reviewer still sees that something was there; the sanitizer raises the blocker
+  finding itself, so no information is lost by not showing the model the live payload.
+- **Patterns require instruction *shape*, not keywords.** `override-previous-instructions` needs an
+  imperative verb, a scope word and an instruction noun in sequence. This is what keeps
+  "see the setup instructions in README.md" quiet.
+- **The fence nonce is 16 hex chars from `secrets`, regenerated per run.** An attacker cannot
+  forge a closing fence for a tag they cannot predict; the test asserts a guessed fence fails.
+- Parser is deliberately **tolerant, not strict**: a truncated or malformed patch returns the
+  hunks it could recover. A parse failure must not be able to take down a review.
+
+---
