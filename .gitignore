@@ -1,0 +1,31 @@
+# --- python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+
+# --- tooling ---
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# --- agentgate ---
+.env
+runs/
+eval_report.json
+eval_report.md
+eval_compare.json
+*.log
+
+# --- os / editor ---
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
