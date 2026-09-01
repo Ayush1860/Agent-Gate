@@ -89,3 +89,44 @@ Newest phase at the bottom. Decisions are recorded so a later session can resume
   hunks it could recover. A parse failure must not be able to take down a review.
 
 ---
+
+## Phase 3 — multi-agent review graph with parallel fan-out
+
+**Status:** complete
+
+### Done
+- `prompts/security.md`, `correctness.md`, `tests.md` — each states one specialisation, the
+  untrusted-data rule, JSON-only schema, and **two** few-shot examples (one defect, one clean).
+- `nodes/__init__.py` — `ReviewState`, prompt loading, message building, JSON extraction,
+  finding coercion, `run_specialist()` (call -> parse -> one repair -> degrade).
+- `nodes/security.py`, `correctness.py`, `tests.py` — thin wiring over `run_specialist`.
+- `nodes/aggregator.py` — dedupe on (file, line, rule), confidence boost on agreement,
+  severity ranking, cap, verdict, and insertion of the sanitizer's blocker finding.
+- `graph.py` — LangGraph `StateGraph`, `review_async()` / `review()`.
+- `tests/test_graph.py` + `tests/test_aggregator.py`. **153 tests passing.**
+
+### Decisions
+- **Parallelism is proved from the trace, not from wall clock.** The test compares the fan-out
+  *span* (min start -> max end across the three agent nodes) against the *sum* of their
+  durations and asserts span < 60% of sum. A wall-clock threshold would be flaky on a loaded
+  machine; this measures scheduling. A companion test sets `CONCURRENCY=1` and asserts the
+  same graph *does* serialise, so the first test cannot pass vacuously.
+- **`ReviewState.agents` and `.errors` use `operator.add` reducers.** LangGraph rejects
+  concurrent writes to a plain key from parallel branches.
+- **The fan-out is a conditional edge returning a list of node names.** Returning a list is
+  what makes LangGraph schedule branches concurrently. It also lets an empty diff skip the
+  agents entirely — zero tokens on a docs-only PR.
+- **`ReviewResult.duration_ms` is wall clock, not the sum of node durations.** The specialists
+  overlap; summing would overstate the review time by ~3x and make the telemetry dishonest.
+- **The sanitizer's injection finding is added by the aggregator, not by an agent.** It is
+  deterministic and must not depend on a model noticing the attack. If an agent *also* reports
+  it, the sanitizer's copy wins and the duplicate is dropped.
+- **Fixed a real bug found by the first end-to-end run:** the mock provider was parsing the
+  *whole* prompt, so the few-shot examples in the system prompt were being reported as findings
+  in `app/cache.py` and `tests/test_billing.py`. The mock now reads only the content inside the
+  nonce fence. This is exactly the failure mode the fence exists to prevent, so it is a good
+  argument for the design.
+- Agents are coerced back into their own lane on parse (a `tests` agent reporting a `security`
+  category gets rewritten), with one exception: `prompt-injection-in-diff` is always security.
+
+---

@@ -31,6 +31,7 @@ MODEL_ID = "mock-reviewer-v1"
 _FILE_RE = re.compile(r"^FILE:\s*(\S+)\s*$")
 _LINE_RE = re.compile(r"^\s*(\d+)\|\s?(.*)$")
 _AGENT_RE = re.compile(r"^AGENT:\s*(\w+)\s*$", re.MULTILINE)
+_FENCE_OPEN_RE = re.compile(r"^<<<UNTRUSTED_DIFF_([0-9a-fA-F]+)\s*$")
 
 # Per-category recall ceiling, in percent. Below 100 on purpose -- see module docstring.
 _RECALL_GATE = {
@@ -204,22 +205,57 @@ def _detect_agent(messages: list[Message]) -> str:
     return "security"
 
 
+def _untrusted_lines(messages: list[Message]) -> list[str]:
+    """Return only the lines inside the nonce fence.
+
+    Critical: the system prompt contains few-shot examples in the very same
+    ``FILE:`` / ``<line>|`` format. Parsing the whole prompt would make the mock
+    "find" defects in its own examples. Only content the sanitizer fenced counts
+    as the diff under review.
+    """
+    lines: list[str] = []
+    for msg in messages:
+        inside = False
+        closing = ""
+        for raw in msg.get("content", "").splitlines():
+            if not inside:
+                opened = _FENCE_OPEN_RE.match(raw.strip())
+                if opened:
+                    inside = True
+                    closing = f"{opened.group(1)}_UNTRUSTED_DIFF>>>"
+                continue
+            if raw.strip() == closing:
+                inside = False
+                continue
+            lines.append(raw)
+
+    if lines:
+        return lines
+    # No fence: an unfenced call (a direct provider test). Fall back to the
+    # non-system turns, which still excludes the few-shot examples.
+    return [
+        raw
+        for msg in messages
+        if msg.get("role") != "system"
+        for raw in msg.get("content", "").splitlines()
+    ]
+
+
 def _parse_payload(messages: list[Message]) -> dict[str, list[tuple[int, str]]]:
-    """Recover ``{file: [(line, text), ...]}`` from the rendered prompt."""
+    """Recover ``{file: [(line, text), ...]}`` from the fenced diff payload."""
     files: dict[str, list[tuple[int, str]]] = {}
     current: str | None = None
-    for msg in messages:
-        for raw in msg.get("content", "").splitlines():
-            fm = _FILE_RE.match(raw)
-            if fm:
-                current = fm.group(1)
-                files.setdefault(current, [])
-                continue
-            if current is None:
-                continue
-            lm = _LINE_RE.match(raw)
-            if lm:
-                files[current].append((int(lm.group(1)), lm.group(2)))
+    for raw in _untrusted_lines(messages):
+        fm = _FILE_RE.match(raw)
+        if fm:
+            current = fm.group(1)
+            files.setdefault(current, [])
+            continue
+        if current is None:
+            continue
+        lm = _LINE_RE.match(raw)
+        if lm:
+            files[current].append((int(lm.group(1)), lm.group(2)))
     return {f: ls for f, ls in files.items() if ls}
 
 
