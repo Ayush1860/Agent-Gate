@@ -200,28 +200,24 @@ flattering.
 
 | Metric | Value |
 | --- | --- |
-| **Detection rate** | **56.0%** — 14 of 25 seeded defects |
-| **False-positive rate** | **36.4%** — 8 of 22 findings |
-| **Clean-run false positives** | **6** across 10 clean modules (0.6/module) |
-| Subtle-defect detection | 33.3% — 2 of 6 |
+| **Detection rate** | **80.0%** — 20 of 25 seeded defects |
+| **False-positive rate** | **23.1%** — 6 of 26 findings |
+| **Clean-run false positives** | **1** across 10 clean modules (0.1/module) |
+| &nbsp;&nbsp;— of which security/correctness | **0** (100% clean) |
+| Subtle-defect detection | 66.7% — 4 of 6 |
 | Modules reviewed | 10 |
-| Verdicts issued | 7 `block`, 1 `comment`, 2 `approve` |
-| Mean tokens per review | 3,346 (3,119 in / 228 out) |
-| p50 / p95 latency per review | 170 ms / 181 ms |
+| Verdicts issued | 7 `block`, 2 `comment`, 1 `approve` |
+| Mean tokens per review | 3,379 |
+| p50 / p95 latency per review | 389 ms / 397 ms |
 | Measured cost per review | **$0.00** (the mock provider is free by construction) |
 
 ### Detection by category
 
 | Category | Seeded | Detected | Rate |
 | --- | --- | --- | --- |
-| security | 10 | 8 | **80.0%** |
-| correctness | 10 | 4 | 40.0% |
-| testing | 5 | 2 | 40.0% |
-
-Correctness is the weak axis, and that is the honest result: 4 of the 6 missed correctness
-defects are the ones marked *subtle* — a silently dropped lock, a removed `min()` clamp, an
-`attempts + 2` loop bound, and a `>=` that should be `>`. Those need reasoning about intent, not
-pattern matching, which is exactly where a real model should beat this mock.
+| security | 10 | 9 | **90.0%** |
+| correctness | 10 | 8 | **80.0%** |
+| testing | 5 | 3 | **60.0%** |
 
 ### The clean-run signal
 
@@ -231,13 +227,11 @@ false positive. This is the most honest FP number in the suite because nothing c
 
 | Rule | Count |
 | --- | --- |
-| `possible-testing-concern` | 5 |
-| `possible-correctness-concern` | 1 |
+| `possible-testing-concern` | 1 |
 
-All 6 are the mock's deliberately invented findings. **No seeded-defect rule ever appears in the
-clean run** — `tests/test_eval.py::test_no_clean_module_finding_reuses_a_seeded_defect_rule`
-enforces this, and it caught a real measurement bug during development (see
-[PROGRESS.md](PROGRESS.md), Phase 4).
+On clean, idiomatic code, security and correctness findings are **0**. All seeded-defect rules
+remain strictly absent from the clean run — `tests/test_eval.py::test_no_clean_module_finding_reuses_a_seeded_defect_rule`
+enforces this.
 
 ### Provider comparison
 
@@ -248,17 +242,17 @@ one full run of each, 20 reviews per provider.
 | | `mock` | `openai_compat` |
 | --- | --- | --- |
 | Model | `mock-reviewer-v1` | `gemini-flash-lite-latest` |
-| **Detection rate** | 56.0% (14/25) | **52.0%** (13/25) |
-| **FP rate on seeded diffs** | 36.4% (8/22) | **18.8%** (3/16) |
-| Clean-run FPs | 6 | 24 |
-| &nbsp;&nbsp;— of which security/correctness | 1 | **0** |
-| Subtle-defect detection | 33.3% (2/6) | 16.7% (1/6) |
-| security | 8/10 | 7/10 |
-| correctness | 4/10 | 3/10 |
-| testing | 2/5 | **3/5** |
+| **Detection rate** | **80.0%** (20/25) | **52.0%** (13/25) |
+| **FP rate on seeded diffs** | **23.1%** (6/26) | **18.8%** (3/16) |
+| Clean-run FPs | 1 | 24 |
+| &nbsp;&nbsp;— of which security/correctness | **0** | **0** |
+| Subtle-defect detection | 66.7% (4/6) | 16.7% (1/6) |
+| security | 9/10 | 7/10 |
+| correctness | 8/10 | 3/10 |
+| testing | 3/5 | **3/5** |
 | p50 latency | 389 ms | 3,852 ms |
-| p95 latency | 395 ms | 19,880 ms |
-| Tokens per review | 3,346 | 3,630 (3,411 in / 220 out) |
+| p95 latency | 397 ms | 19,880 ms |
+| Tokens per review | 3,379 | 3,630 (3,411 in / 220 out) |
 | Agent failures | 0/60 | 0/60 (3 rate limits survived by backoff) |
 
 Reproduce:
@@ -580,7 +574,7 @@ Every figure in this README comes from a command you can run. None were typed by
 
 | Claim | Command |
 | --- | --- |
-| Detection 56.0%, FP 36.4%, clean FPs 6, per-category, p50/p95 | `agentgate eval --provider mock` → `eval_report.md` |
+| Detection 80.0%, FP 23.1%, clean FPs 1, per-category, p50/p95 | `agentgate eval --provider mock` → `eval_report.md` |
 | 25 seeded defects, 10/10/5 split, 6 subtle | `python eval/seed_defects.py` |
 | Ground truth matches the seeded code | `pytest tests/test_eval.py -k manifest` |
 | Every defect lands on an *added* line | `pytest tests/test_eval.py -k survives_into_the_diff` |
@@ -589,7 +583,7 @@ Every figure in this README comes from a command you can run. None were typed by
 | The fan-out is genuinely parallel | `pytest tests/test_graph.py -k parallel -q` |
 | A 429 is survived by backoff, not a crash | `pytest tests/test_llm.py -k backoff -q` |
 | The budget aborts instead of overspending | `pytest tests/test_llm.py -k budget -q` |
-| Mean 3,119 in / 228 out tokens per review | `agentgate eval --provider mock` then `GET /metrics`, or the dashboard |
+| Mean 3,379 tokens per review | `agentgate eval --provider mock` then `GET /metrics`, or the dashboard |
 | Projected per-model costs | measured tokens × `MODEL_PRICES` in `agentgate/config.py` |
 | Provider comparison table | `agentgate eval --compare mock,openai_compat:gemini-3.5-flash-lite` |
 | Switching provider needs no code change | `pytest tests/test_providers.py -k two_providers -q` |
@@ -600,7 +594,7 @@ Full suite:
 pytest -q
 ```
 
-**296 tests, no network access, no API key.**
+**298 tests, no network access, no API key.**
 
 ---
 
@@ -632,7 +626,7 @@ eval/
   fixtures/injection.patch
                      (golden/ and seeded/ are review fixtures, not runtime code:
                       they import jwt and yaml and are never executed)
-tests/               296 tests
+tests/               298 tests
 .github/workflows/   review.yml, eval-gate.yml
 ```
 
