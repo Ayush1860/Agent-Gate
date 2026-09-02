@@ -339,3 +339,48 @@ def test_metrics_on_an_empty_trace_log_do_not_crash(client, tmp_path, monkeypatc
 
     config.get_settings.cache_clear()
     assert client.get("/metrics").json()["runs"] == 0
+
+
+# --------------------------------------------------------------------------- #
+# Dashboard
+# --------------------------------------------------------------------------- #
+def test_the_dashboard_runs_as_a_top_level_script(tmp_path, monkeypatch):
+    """`streamlit run agentgate/dashboard.py` executes the file with no parent
+    package. Relative imports work when the module is imported normally but blow
+    up under Streamlit, so this loads it the way Streamlit does."""
+    import runpy
+    import warnings
+
+    from agentgate.graph import review
+
+    # Give the dashboard some data so it exercises the aggregation paths rather
+    # than short-circuiting on an empty trace log.
+    review(INJECTION.read_text(encoding="utf-8"), run_id="dash-1")
+
+    script = Path(__file__).resolve().parent.parent / "agentgate" / "dashboard.py"
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        runpy.run_path(str(script), run_name="__main__")
+
+
+def test_the_dashboard_handles_an_empty_trace_log(tmp_path, monkeypatch):
+    import runpy
+    import warnings
+
+    monkeypatch.setenv("AGENTGATE_TRACE_FILE", str(tmp_path / "none.jsonl"))
+    monkeypatch.setenv("AGENTGATE_REVIEW_FILE", str(tmp_path / "none-reviews.jsonl"))
+    from agentgate import config
+
+    config.get_settings.cache_clear()
+
+    script = Path(__file__).resolve().parent.parent / "agentgate" / "dashboard.py"
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        # The empty-log guard stops the script; it must do so cleanly rather than
+        # falling through into the aggregation and raising a KeyError.
+        try:
+            runpy.run_path(str(script), run_name="__main__")
+        except BaseException as exc:  # noqa: BLE001
+            assert type(exc).__name__ in ("SystemExit", "StopException"), (
+                f"unexpected {exc!r}"
+            )

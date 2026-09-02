@@ -133,9 +133,37 @@ def write_trace(node_trace: NodeTrace) -> None:
         log.warning("could not write trace to %s: %s", path, exc)
 
 
+def write_review_summary(summary: dict[str, Any]) -> None:
+    """Append one line per completed review to ``runs/reviews.jsonl``.
+
+    The node-level trace records cost and latency but not findings, and the
+    dashboard needs findings by severity and category. Kept as a separate log so
+    the trace schema stays one-row-per-node.
+    """
+    settings = get_settings()
+    if not settings.trace_enabled:
+        return
+    path = Path(settings.review_file)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with _WRITE_LOCK:
+            with path.open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps(summary) + "\n")
+    except (OSError, TypeError, ValueError) as exc:  # pragma: no cover
+        log.warning("could not write review summary to %s: %s", path, exc)
+
+
+def read_reviews(path: Path | None = None) -> list[dict[str, Any]]:
+    """Read reviews.jsonl, skipping malformed lines."""
+    return _read_jsonl(Path(path or get_settings().review_file))
+
+
 def read_traces(path: Path | None = None) -> list[dict[str, Any]]:
     """Read traces.jsonl, skipping any malformed lines rather than blowing up."""
-    p = Path(path or get_settings().trace_file)
+    return _read_jsonl(Path(path or get_settings().trace_file))
+
+
+def _read_jsonl(p: Path) -> list[dict[str, Any]]:
     if not p.exists():
         return []
     out: list[dict[str, Any]] = []

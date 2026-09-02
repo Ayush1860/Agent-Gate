@@ -1,0 +1,52 @@
+# docker compose up  ->  API on :8000, dashboard on :8501
+#
+# Runs against the deterministic mock provider by default, so this works with no
+# API key at all. To use a live provider, copy .env.example to .env, uncomment one
+# provider block, and re-run: both services read the same file.
+
+services:
+  api:
+    build: .
+    image: agentgate:latest
+    container_name: agentgate-api
+    ports:
+      - "8000:8000"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      AGENTGATE_TRACE_FILE: /app/runs/traces.jsonl
+      AGENTGATE_REVIEW_FILE: /app/runs/reviews.jsonl
+    volumes:
+      - runs:/app/runs
+    restart: unless-stopped
+
+  dashboard:
+    build: .
+    image: agentgate:latest
+    container_name: agentgate-dashboard
+    command:
+      - streamlit
+      - run
+      - agentgate/dashboard.py
+      - --server.port=8501
+      - --server.address=0.0.0.0
+      - --server.headless=true
+      - --browser.gatherUsageStats=false
+    ports:
+      - "8501:8501"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      AGENTGATE_TRACE_FILE: /app/runs/traces.jsonl
+      AGENTGATE_REVIEW_FILE: /app/runs/reviews.jsonl
+    volumes:
+      # Shared with the API so the dashboard sees traces as they are written.
+      - runs:/app/runs
+    depends_on:
+      - api
+    restart: unless-stopped
+
+volumes:
+  runs:

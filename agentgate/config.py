@@ -108,6 +108,10 @@ class Settings(BaseSettings):
 
     # --- telemetry ---
     trace_file: Path = Field(default=RUNS_DIR / "traces.jsonl")
+    #: One line per completed review: verdict, findings by severity/category,
+    #: injection flag. The node-level trace does not carry findings, and the
+    #: dashboard needs them.
+    review_file: Path = Field(default=RUNS_DIR / "reviews.jsonl")
     trace_enabled: bool = True
 
     def price_key(self) -> str:

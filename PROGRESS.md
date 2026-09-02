@@ -220,3 +220,69 @@ Newest phase at the bottom. Decisions are recorded so a later session can resume
   headline security claim is verified on every push rather than only in the unit tests.
 
 ---
+
+## Phase 6 — telemetry dashboard and containerisation
+
+**Status:** complete
+
+### Done
+- `agentgate/dashboard.py` — runs over time, p50/p95 latency per node, cost/tokens per review,
+  findings by severity and category, injection-detection counts with a per-pattern breakdown,
+  retry/429 count, and the latest eval report including the provider-comparison table.
+- `runs/reviews.jsonl` — one summary line per completed review.
+- `Dockerfile` (non-root, healthcheck, deps cached ahead of source) + `docker-compose.yml`
+  (api on :8000, dashboard on :8501, shared `runs` volume, optional `.env`) + `.dockerignore`.
+- **Verified for real:** built the image, ran `docker compose up`, posted the injection fixture
+  to the containerised API (`block`, 4 findings), and loaded the dashboard in a browser.
+
+### Decisions
+- **Added a second log, `runs/reviews.jsonl`, rather than widening `NodeTrace`.** The node trace
+  is one-row-per-node and carries cost and latency but no findings; the dashboard needs findings
+  by severity and category. Keeping them separate leaves the trace schema clean.
+- **Fixed a real bug caught only by opening the page.** `streamlit run agentgate/dashboard.py`
+  executes the file as a top-level script with no parent package, so `from .config import ...`
+  raised `ImportError` at render time. The HTTP healthcheck passed (Streamlit serves fine and
+  only fails when the script runs), so this was invisible to `curl` — it took a screenshot to
+  see it. Now uses absolute imports plus a `sys.path` guard, with
+  `test_the_dashboard_runs_as_a_top_level_script` loading it via `runpy` exactly as Streamlit
+  does.
+- **`st.stop()` is followed by `sys.exit(0)` in the empty-log guard.** `st.stop()` only halts
+  inside the Streamlit runtime; outside it the call is a no-op and the code below assumed a
+  populated frame, raising `KeyError: 'run_id'`.
+- The dashboard's fan-out panel computes the concurrency saving from live traces. Observed in
+  the container: **125 ms wall clock against 368 ms of summed agent time — 66% saved.**
+- The eval-report panel degrades to an empty state in the container, because the eval runs on the
+  host. The sidebar takes an arbitrary path, so this is configurable rather than broken.
+
+---
+
+## Phase 7 — README
+
+**Status:** complete
+
+### Done
+`README.md` with quickstart (free-tier provider as the default path), architecture including a
+Mermaid diagram of the graph, results with real mock-mode numbers, a threat-model section with
+the payload and before/after behaviour, a cost section, CLI/API reference, CI integration, and a
+"reproduce every number" table mapping each claim to the command that produces it.
+
+### Decisions
+- **The results table carries the honest 56% detection**, with the weak axis (correctness, 40%)
+  called out and explained rather than buried. Four of the six missed correctness defects are the
+  ones marked subtle, which is exactly where a real model should beat this mock.
+- **Live-model rows are explicit `TODO(live-model)` placeholders.** Filling them with numbers I
+  have not run would be the one thing the spec says not to do.
+- **Cost is split into "measured" and "projected".** The only measured spend is $0.00 (mock).
+  What is genuinely measured is token volume — 3,119 in / 228 out per review — and the per-model
+  table is that volume multiplied by the `MODEL_PRICES` list prices, labelled as a projection and
+  flagged as a floor for output tokens because a live model is more verbose than the mock.
+- **The threat model states what it does *not* defend against** — paraphrased instructions with
+  no pattern signature, semantic manipulation, and attacks outside the diff.
+
+---
+
+## Final state
+
+- **239 tests**, passing with no network access and no API key.
+- 7 commits, one per phase.
+- `docker compose up` verified end to end, API and dashboard both exercised.

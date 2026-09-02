@@ -16,6 +16,7 @@ import asyncio
 import logging
 import time
 import uuid
+from datetime import datetime, timezone
 
 from langgraph.graph import END, START, StateGraph
 
@@ -28,7 +29,7 @@ from .nodes.correctness import correctness_node
 from .nodes.security import security_node
 from .nodes.tests import tests_node
 from .sanitizer import sanitize_hunks
-from .telemetry import current_run, new_run, traced
+from .telemetry import current_run, new_run, traced, write_review_summary
 
 log = logging.getLogger("agentgate.graph")
 
@@ -166,7 +167,7 @@ async def review_async(
         trace = ctx.trace
     wall_ms = int((time.perf_counter() - started) * 1000)
 
-    return ReviewResult(
+    result = ReviewResult(
         run_id=rid,
         verdict=state.get("verdict", "approve"),
         findings=state.get("findings") or [],
@@ -181,6 +182,34 @@ async def review_async(
         # overlap, so summing them would overstate how long the review took.
         duration_ms=wall_ms,
         errors=state.get("errors") or [],
+    )
+    _record_review(result)
+    return result
+
+
+def _record_review(result: ReviewResult) -> None:
+    """One summary line per review, for the dashboard's findings breakdown."""
+    by_category: dict[str, int] = {}
+    for finding in result.findings:
+        by_category[finding.category.value] = by_category.get(finding.category.value, 0) + 1
+
+    write_review_summary(
+        {
+            "run_id": result.run_id,
+            "recorded_at": datetime.now(timezone.utc).isoformat(),
+            "verdict": result.verdict,
+            "provider": result.provider,
+            "model": result.model,
+            "findings": len(result.findings),
+            "by_severity": result.counts_by_severity(),
+            "by_category": by_category,
+            "injection_detected": result.injection_detected,
+            "injection_patterns": result.injection_patterns,
+            "total_tokens": result.total_tokens,
+            "total_cost_usd": result.total_cost_usd,
+            "duration_ms": result.duration_ms,
+            "degraded_agents": len(result.errors),
+        }
     )
 
 
