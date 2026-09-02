@@ -1,0 +1,83 @@
+name: Tests and eval drift gate
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test-and-eval:
+    runs-on: ubuntu-latest
+    env:
+      # Everything here runs against the deterministic mock provider. No key, no
+      # network, no spend -- so this gate is safe to run on every push.
+      AGENTGATE_PROVIDER: mock
+      AGENTGATE_MODEL: mock-reviewer-v1
+      AGENTGATE_MOCK_LATENCY_MS: '0'
+      AGENTGATE_EVAL_MIN_DETECTION: '0.40'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -e .
+
+      - name: Run the test suite
+        # Proves the suite needs neither an API key nor the network.
+        env:
+          AGENTGATE_API_KEY: ''
+        run: pytest -q
+
+      - name: Verify the ground truth is in sync with the seeded modules
+        run: |
+          python eval/seed_defects.py
+          git diff --exit-code -- eval/seeded eval/manifest.json \
+            || (echo "::error title=Stale ground truth::eval/seeded or eval/manifest.json is out of date. Run 'python eval/seed_defects.py' and commit the result." && exit 1)
+
+      - name: Run the golden evaluation (mock mode) and enforce the drift gate
+        run: agentgate eval --provider mock --out eval_report.json --gate
+
+      - name: Summarise the evaluation
+        if: always()
+        run: |
+          if [ -f eval_report.md ]; then
+            cat eval_report.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload the evaluation report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-report
+          path: |
+            eval_report.json
+            eval_report.md
+          if-no-files-found: warn
+
+      - name: Prove the injection fixture is still blocked
+        run: |
+          set +e
+          agentgate review --diff eval/fixtures/injection.patch --json > injection.json
+          code=$?
+          set -e
+          python - <<'PY'
+          import json, sys
+          result = json.load(open("injection.json"))
+          assert result["injection_detected"] is True, "prompt injection was not detected"
+          assert result["verdict"] == "block", f"expected block, got {result['verdict']}"
+          rules = {f["rule"] for f in result["findings"]}
+          assert "prompt-injection-in-diff" in rules, "no injection finding was raised"
+          print("injection defence holds:", sorted(result["injection_patterns"]))
+          PY
+          test "$code" -eq 1 || (echo "expected exit code 1 for a blocking verdict, got $code" && exit 1)

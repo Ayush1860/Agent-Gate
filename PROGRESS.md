@@ -185,3 +185,38 @@ Newest phase at the bottom. Decisions are recorded so a later session can resume
   (security 80%, correctness/testing 60%) and by subtle defects the pattern layer cannot see.
 
 ---
+
+## Phase 5 — CLI, API, and CI quality gates
+
+**Status:** complete
+
+### Done
+- `agentgate/cli.py` — `review` (`--diff` / `--pr` / stdin, `--json`, `--fail-on`,
+  `--comment-file`), `eval` (`--provider`, `--out`, `--compare`, `--gate`), `serve`, `dashboard`.
+- `agentgate/api.py` — `POST /review` (JSON or raw patch), `GET /runs`, `GET /runs/{run_id}`,
+  `GET /metrics`, plus `GET /health`.
+- `pyproject.toml` + `agentgate/__main__.py` so both `agentgate ...` and `python -m agentgate`
+  work. Dependencies still come from `requirements.txt` — no poetry, no uv.
+- `.github/workflows/review.yml` and `.github/workflows/eval-gate.yml`.
+- `tests/test_cli_api.py` (40 tests). **237 tests passing.**
+
+### Decisions
+- **`--comment-file` writes the Markdown comment from Python**, and the workflow just posts the
+  file. Formatting stays where it can be unit-tested rather than living in inline shell.
+- **Comment updates are keyed on an HTML marker** (`<!-- agentgate-review -->`) rather than on
+  the comment author, so re-runs update one comment instead of spamming the thread.
+- **Pipes in finding text are escaped** — an unescaped `|` in a message would silently break the
+  Markdown table. Tested.
+- **`--fail-on block` is verdict-based; `high`/`medium` are severity-based.** `block` and `high`
+  coincide today (a block *is* blocker-or-high), but keeping them separate means the verdict
+  rule can change without silently changing what `--fail-on high` means.
+- **A budget abort is HTTP 402, not 500.** The request was well-formed; the run was refused on
+  cost grounds, and the caller needs to tell those apart.
+- **The review workflow skips gracefully with a `::notice`** when `AGENTGATE_API_KEY` is unset,
+  because a fork PR cannot see repository secrets and a hard failure there would be noise.
+- **The eval-gate workflow re-runs `seed_defects.py` and fails on any diff**, so a hand-edited
+  seeded module or a stale manifest is caught in CI rather than quietly skewing the numbers.
+- The eval gate also re-runs the injection fixture end to end and asserts exit code 1, so the
+  headline security claim is verified on every push rather than only in the unit tests.
+
+---

@@ -1,0 +1,27 @@
+# Packaging metadata only. Dependencies live in requirements.txt and are installed
+# into a standard venv -- this file exists so that `pip install -e .` provides the
+# `agentgate` console script.
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agentgate"
+version = "0.1.0"
+description = "Multi-agent AI code review as a CI quality gate."
+readme = "README.md"
+requires-python = ">=3.11"
+dynamic = ["dependencies"]
+
+[project.scripts]
+agentgate = "agentgate.cli:main"
+
+[tool.setuptools]
+packages = ["agentgate", "agentgate.llm", "agentgate.nodes"]
+
+[tool.setuptools.package-data]
+agentgate = ["prompts/*.md"]
+
+[tool.setuptools.dynamic]
+dependencies = { file = ["requirements.txt"] }

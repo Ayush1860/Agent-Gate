@@ -1,0 +1,122 @@
+name: AgentGate review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: agentgate-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the pull request
+        uses: actions/checkout@v4
+        with:
+          # Full history so the merge base with the target branch is reachable.
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Decide whether a provider is configured
+        id: provider
+        env:
+          AGENTGATE_API_KEY: ${{ secrets.AGENTGATE_API_KEY }}
+        run: |
+          if [ -n "$AGENTGATE_API_KEY" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=AgentGate skipped::No AGENTGATE_API_KEY repository secret is configured, so the live review was skipped. The deterministic mock evaluation still runs in the eval-gate workflow."
+          fi
+
+      - name: Set up Python
+        if: steps.provider.outputs.configured == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install
+        if: steps.provider.outputs.configured == 'true'
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -e .
+
+      - name: Produce the diff against the base ref
+        if: steps.provider.outputs.configured == 'true'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          git fetch --no-tags --depth=0 origin "$BASE_SHA" "$HEAD_SHA" || true
+          git diff --unified=3 "$BASE_SHA...$HEAD_SHA" > pr.patch
+          echo "diff is $(wc -l < pr.patch) lines"
+
+      - name: Run AgentGate
+        if: steps.provider.outputs.configured == 'true'
+        id: review
+        continue-on-error: true
+        env:
+          AGENTGATE_PROVIDER: ${{ vars.AGENTGATE_PROVIDER || 'openai_compat' }}
+          AGENTGATE_MODEL: ${{ vars.AGENTGATE_MODEL }}
+          AGENTGATE_BASE_URL: ${{ vars.AGENTGATE_BASE_URL }}
+          AGENTGATE_API_KEY: ${{ secrets.AGENTGATE_API_KEY }}
+          # Free tiers are rate-limited before they are price-limited.
+          AGENTGATE_CONCURRENCY: ${{ vars.AGENTGATE_CONCURRENCY || '2' }}
+          AGENTGATE_TOKEN_BUDGET_PER_RUN: ${{ vars.AGENTGATE_TOKEN_BUDGET_PER_RUN || '120000' }}
+        run: |
+          set +e
+          agentgate review --diff pr.patch --json --comment-file comment.md > review.json
+          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+          set -e
+          python -c "import json;d=json.load(open('review.json'));print('verdict:',d['verdict'],'findings:',len(d['findings']))"
+
+      - name: Post or update the review comment
+        if: steps.provider.outputs.configured == 'true'
+        uses: actions/github-script@v7
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require('fs');
+            const marker = '<!-- agentgate-review -->';
+            if (!fs.existsSync('comment.md')) {
+              core.warning('AgentGate produced no comment file; nothing to post.');
+              return;
+            }
+            const body = fs.readFileSync('comment.md', 'utf8');
+            const issue_number = Number(process.env.PR_NUMBER);
+            const { owner, repo } = context.repo;
+
+            // Update our own comment on re-runs rather than spamming new ones.
+            const existing = await github.paginate(
+              github.rest.issues.listComments,
+              { owner, repo, issue_number, per_page: 100 }
+            );
+            const mine = existing.find(c => c.body && c.body.includes(marker));
+
+            if (mine) {
+              await github.rest.issues.updateComment({ owner, repo, comment_id: mine.id, body });
+              core.info(`Updated comment ${mine.id}`);
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number, body });
+              core.info('Created a new review comment');
+            }
+
+      - name: Fail the build when the verdict is block
+        if: steps.provider.outputs.configured == 'true'
+        run: |
+          verdict=$(python -c "import json;print(json.load(open('review.json'))['verdict'])")
+          echo "AgentGate verdict: $verdict"
+          if [ "$verdict" = "block" ]; then
+            echo "::error title=AgentGate::Blocking findings were reported on this pull request."
+            exit 1
+          fi
