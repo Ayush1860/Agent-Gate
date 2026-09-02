@@ -219,7 +219,7 @@ def cmd_review(args: argparse.Namespace) -> int:
 def cmd_eval(args: argparse.Namespace) -> int:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     from eval.report import summary_line, write_report
-    from eval.runner import compare_providers, run_eval
+    from eval.runner import ProviderUnavailable, compare_providers, run_eval
 
     out_path = Path(args.out)
 
@@ -227,7 +227,11 @@ def cmd_eval(args: argparse.Namespace) -> int:
         providers = [p.strip() for p in args.compare.split(",") if p.strip()]
         if len(providers) < 2:
             raise SystemExit("--compare needs at least two providers, e.g. mock,openai_compat")
-        comparison = compare_providers(providers)
+        try:
+            comparison = compare_providers(providers)
+        except ProviderUnavailable as exc:
+            print(f"aborted: {exc}", file=sys.stderr)
+            return 3
         primary = comparison["results"][providers[0]]
         json_path, md_path = write_report(primary, json_path=out_path, comparison=comparison)
         for row in comparison["table"]:
@@ -240,7 +244,11 @@ def cmd_eval(args: argparse.Namespace) -> int:
         print(f"\nwrote {json_path} and {md_path}")
         return 0
 
-    report = run_eval(provider=args.provider)
+    try:
+        report = run_eval(provider=args.provider)
+    except ProviderUnavailable as exc:
+        print(f"aborted: {exc}", file=sys.stderr)
+        return 3
     json_path, md_path = write_report(report, json_path=out_path)
     print(summary_line(report))
     print(f"wrote {json_path} and {md_path}")

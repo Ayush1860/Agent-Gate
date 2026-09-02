@@ -400,3 +400,89 @@ def test_the_comparison_row_reports_the_provider_actually_used():
     assert row["provider"] == "mock"
     assert row["model"] == "mock-reviewer-v1"
     assert row["spec"] == "mock:mock-reviewer-v1"
+
+
+# --------------------------------------------------------------------------- #
+# Aborting when the provider stops answering
+# --------------------------------------------------------------------------- #
+def test_the_eval_aborts_once_every_agent_is_failing(monkeypatch):
+    """A retry against an exhausted quota spends another request from that quota.
+
+    Continuing would produce numbers that measure the rate limiter rather than the
+    reviewer, so two consecutive dead reviews stop the run.
+    """
+    from agentgate import llm
+    from agentgate.llm.base import TransientError
+    from eval.runner import ProviderUnavailable, run_eval
+
+    async def dead(messages, **kw):
+        raise TransientError("openai_compat failed after 6 attempts: rate limited (429)")
+
+    monkeypatch.setattr(llm, "complete", dead)
+
+    with pytest.raises(ProviderUnavailable) as excinfo:
+        run_eval()
+    message = str(excinfo.value)
+    assert "aborting the eval" in message
+    assert "consecutive" in message
+    assert "rate limited" in message
+
+
+def test_a_single_dead_review_does_not_abort_the_run(monkeypatch):
+    """One bad module must not sink an otherwise healthy eval."""
+    from agentgate import llm
+    from agentgate.llm.base import TransientError
+    from eval.runner import run_eval
+
+    real = llm.complete
+    seen: list[str] = []
+
+    async def flaky(messages, **kw):
+        payload = messages[-1]["content"]
+        if "cache.py" in payload and "cache.py" not in seen:
+            seen.append("cache.py")
+            raise TransientError("one-off blip")
+        return await real(messages, **kw)
+
+    monkeypatch.setattr(llm, "complete", flaky)
+    report = run_eval()
+    assert report["totals"]["modules_reviewed"] == 10
+
+
+def test_retries_are_recorded_even_when_every_attempt_fails(monkeypatch):
+    """The trace must show the retries that were burned, not just successful ones."""
+    import asyncio
+
+    from agentgate import llm
+    from agentgate.llm.base import LLMProvider, RateLimitError
+    from agentgate.models import LLMResponse
+    from agentgate.telemetry import new_run, read_traces, traced
+
+    class AlwaysLimited(LLMProvider):
+        name = "mock"
+
+        async def raw_complete(self, messages, **kw) -> LLMResponse:
+            raise RateLimitError("429", retry_after=0.001)
+
+    async def sleeper(_seconds: float) -> None:
+        return None
+
+    @traced("agent_security")
+    async def node():
+        try:
+            await llm.complete(
+                [{"role": "user", "content": "x"}],
+                provider=AlwaysLimited(model="mock-reviewer-v1"),
+                sleeper=sleeper,
+            )
+        except Exception:
+            return None
+
+    async def main():
+        with new_run("retry-trace"):
+            await node()
+
+    asyncio.run(main())
+
+    entry = [t for t in read_traces() if t["node"] == "agent_security"][-1]
+    assert entry["retry_count"] == 3, "four attempts means three retries"

@@ -18,7 +18,7 @@ from typing import Any, Callable
 
 from ..config import cost_usd, get_settings, price_for
 from ..models import LLMResponse
-from ..telemetry import current_run, record_usage
+from ..telemetry import current_run, record_retries, record_usage
 from .anthropic import AnthropicProvider
 from .base import (
     FatalLLMError,
@@ -173,6 +173,7 @@ async def complete(
             _account(prov, resp)
             return resp
 
+    record_retries(retry_count)
     raise TransientError(
         f"{prov.name} failed after {settings.max_attempts} attempts: {last_error}"
     ) from last_error

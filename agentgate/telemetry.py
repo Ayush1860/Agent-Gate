@@ -125,6 +125,18 @@ def record_usage(resp: LLMResponse, cost: float) -> None:
         ctx.charge(resp.total_tokens, cost)
 
 
+def record_retries(count: int) -> None:
+    """Attribute retries to the current node even when the call ultimately failed.
+
+    Usage is only reported on success, so without this a call that burned all six
+    attempts against a rate limit showed retry_count=0 in the trace -- the one
+    case where the retry count matters most.
+    """
+    bucket = _NODE_USAGE.get()
+    if bucket is not None:
+        bucket.retry_count += count
+
+
 def mark_node_degraded(reason: str) -> None:
     """Record that this node degraded, even though it is returning normally.
 

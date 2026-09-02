@@ -30,6 +30,14 @@ from agentgate.graph import review_async
 from agentgate.models import Finding, ReviewResult
 from agentgate.telemetry import BudgetExceeded
 
+#: Number of specialist agents; a review losing all of them is a dead review.
+SPECIALIST_COUNT = 3
+
+
+class ProviderUnavailable(RuntimeError):
+    """The provider stopped answering; continuing would measure the rate limiter."""
+
+
 GOLDEN = EVAL_DIR / "golden"
 SEEDED = EVAL_DIR / "seeded"
 MANIFEST = EVAL_DIR / "manifest.json"
@@ -253,6 +261,26 @@ async def run_eval_async(
 
     seeded_runs: list[ModuleRun] = []
     clean_runs: list[ModuleRun] = []
+    dead_streak = 0
+
+    def _check_alive(run: ModuleRun) -> None:
+        """Abort once the provider has clearly stopped answering.
+
+        A retry against an exhausted quota consumes another request from that same
+        quota, so hammering makes recovery slower, not faster. Two consecutive
+        reviews where *every* agent degraded means the eval is generating numbers
+        that measure the rate limiter rather than the reviewer.
+        """
+        nonlocal dead_streak
+        every_agent_failed = not run.findings and len(run.errors) >= SPECIALIST_COUNT
+        dead_streak = dead_streak + 1 if every_agent_failed else 0
+        if dead_streak >= 2:
+            raise ProviderUnavailable(
+                f"aborting the eval: every agent failed on {dead_streak} consecutive "
+                f"reviews against {settings.provider}:{settings.model}. "
+                f"Last error: {run.errors[0] if run.errors else 'unknown'}. "
+                "The numbers from here would measure the rate limiter, not the reviewer."
+            )
 
     for name in names:
         clean_path, seeded_path = GOLDEN / name, SEEDED / name
@@ -260,20 +288,20 @@ async def run_eval_async(
             continue
         diff = make_diff(clean_path, seeded_path)
         if diff:
-            seeded_runs.append(
-                await _run_one(name, "seeded", diff, f"eval-{settings.provider}-{name}")
-            )
+            run = await _run_one(name, "seeded", diff, f"eval-{settings.provider}-{name}")
+            seeded_runs.append(run)
+            _check_alive(run)
 
     if include_clean:
         for name in names:
-            clean_runs.append(
-                await _run_one(
-                    name,
-                    "clean",
-                    make_clean_diff(GOLDEN / name),
-                    f"evalclean-{settings.provider}-{name}",
-                )
+            run = await _run_one(
+                name,
+                "clean",
+                make_clean_diff(GOLDEN / name),
+                f"evalclean-{settings.provider}-{name}",
             )
+            clean_runs.append(run)
+            _check_alive(run)
 
     return summarise(settings.provider, settings.model, defects, seeded_runs, clean_runs)
 
