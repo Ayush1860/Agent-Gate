@@ -577,6 +577,8 @@ eval/
   seed_defects.py    generates both, in one pass
   runner.py  report.py
   fixtures/injection.patch
+                     (golden/ and seeded/ are review fixtures, not runtime code:
+                      they import jwt and yaml and are never executed)
 tests/               239 tests
 .github/workflows/   review.yml, eval-gate.yml
 ```
@@ -588,4 +590,4 @@ why, including the two measurement bugs found and fixed along the way.
 
 ## Licence
 
-MIT.
+MIT — see [LICENSE](LICENSE).
