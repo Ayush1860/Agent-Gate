@@ -119,6 +119,59 @@ async def test_a_response_with_no_usage_block_does_not_crash():
     assert resp.input_tokens == 0 and resp.output_tokens == 0
 
 
+async def test_reasoning_tokens_are_counted_as_output():
+    """Thinking models bill reasoning tokens but report them only in total_tokens.
+
+    Gemini 3.x returns e.g. prompt=18, completion=12, total=173 -- the missing 143
+    are reasoning tokens. Trusting completion_tokens alone understates cost by an
+    order of magnitude on a reasoning-heavy review.
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "model": "gemini-3.6-flash",
+                "choices": [{"message": {"content": VERDICT_JSON}}],
+                "usage": {
+                    "prompt_tokens": 18,
+                    "completion_tokens": 12,
+                    "total_tokens": 173,
+                },
+            },
+        )
+
+    resp = await _provider(handler).raw_complete(MESSAGES)
+    assert resp.input_tokens == 18
+    assert resp.output_tokens == 155  # 12 visible + 143 reasoning
+    assert resp.total_tokens == 173
+
+
+async def test_a_consistent_usage_block_is_left_alone():
+    """When total_tokens == prompt + completion there is nothing to reconcile."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "choices": [{"message": {"content": "{}"}}],
+                "usage": {
+                    "prompt_tokens": 900,
+                    "completion_tokens": 120,
+                    "total_tokens": 1020,
+                },
+            },
+        )
+
+    resp = await _provider(handler).raw_complete(MESSAGES)
+    assert (resp.input_tokens, resp.output_tokens) == (900, 120)
+
+
+async def test_a_missing_total_does_not_inflate_the_output_count():
+    resp = await _provider(_ok_response).raw_complete(MESSAGES)
+    assert (resp.input_tokens, resp.output_tokens) == (900, 120)
+
+
 # --------------------------------------------------------------------------- #
 # openai_compat: failure classification
 # --------------------------------------------------------------------------- #

@@ -348,3 +348,55 @@ def test_the_comparison_table_renders_every_provider(report):
 
     combined = render_markdown(report, comparison)
     assert "## Provider comparison" in combined
+
+
+# --------------------------------------------------------------------------- #
+# Provider specs for --compare
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize(
+    "spec,expected",
+    [
+        ("mock", ("mock", "mock-reviewer-v1")),
+        ("openai_compat", ("openai_compat", None)),
+        ("openai_compat:gemini-3.6-flash", ("openai_compat", "gemini-3.6-flash")),
+        ("anthropic:claude-haiku-4-5-20251001", ("anthropic", "claude-haiku-4-5-20251001")),
+        (" mock : custom-model ", ("mock", "custom-model")),
+    ],
+)
+def test_a_provider_spec_splits_into_provider_and_model(spec, expected):
+    from eval.runner import parse_provider_spec
+
+    assert parse_provider_spec(spec) == expected
+
+
+def test_a_model_id_containing_a_colon_survives_parsing():
+    """OpenRouter free routes look like `vendor/model:free`."""
+    from eval.runner import parse_provider_spec
+
+    assert parse_provider_spec("openai_compat:meta-llama/llama-3.3-70b-instruct:free") == (
+        "openai_compat",
+        "meta-llama/llama-3.3-70b-instruct:free",
+    )
+
+
+def test_comparing_restores_the_original_provider_and_model(monkeypatch):
+    """--compare mutates the environment; it must put it back."""
+    import os
+
+    from eval.runner import compare_providers
+
+    monkeypatch.setenv("AGENTGATE_PROVIDER", "mock")
+    monkeypatch.setenv("AGENTGATE_MODEL", "mock-reviewer-v1")
+    compare_providers(["mock"])
+    assert os.environ["AGENTGATE_PROVIDER"] == "mock"
+    assert os.environ["AGENTGATE_MODEL"] == "mock-reviewer-v1"
+
+
+def test_the_comparison_row_reports_the_provider_actually_used():
+    from eval.runner import compare_providers
+
+    comparison = compare_providers(["mock:mock-reviewer-v1"])
+    row = comparison["table"][0]
+    assert row["provider"] == "mock"
+    assert row["model"] == "mock-reviewer-v1"
+    assert row["spec"] == "mock:mock-reviewer-v1"

@@ -95,10 +95,21 @@ class OpenAICompatProvider(LLMProvider):
             raise FatalLLMError(f"unparseable response from {self.base_url}: {exc}") from exc
 
         usage = data.get("usage") or {}
+        input_tokens = int(usage.get("prompt_tokens", 0) or 0)
+        output_tokens = int(usage.get("completion_tokens", 0) or 0)
+
+        # Thinking models (Gemini 3.x, o-series) spend reasoning tokens that are
+        # billed as output but reported only in total_tokens, not in
+        # completion_tokens. Folding the difference in keeps cost honest --
+        # otherwise a reasoning-heavy review looks far cheaper than it was.
+        total_tokens = int(usage.get("total_tokens", 0) or 0)
+        if total_tokens > input_tokens + output_tokens:
+            output_tokens = total_tokens - input_tokens
+
         return LLMResponse(
             text=text,
-            input_tokens=int(usage.get("prompt_tokens", 0) or 0),
-            output_tokens=int(usage.get("completion_tokens", 0) or 0),
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
             model=str(data.get("model") or self.model),
             provider=self.name,
             latency_ms=latency_ms,

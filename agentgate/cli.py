@@ -314,7 +314,13 @@ def build_parser() -> argparse.ArgumentParser:
     ev = sub.add_parser("eval", help="run the golden evaluation suite")
     ev.add_argument("--provider", help="provider to evaluate (default: AGENTGATE_PROVIDER)")
     ev.add_argument("--out", default="eval_report.json", help="path for the JSON report")
-    ev.add_argument("--compare", help="comma-separated providers to compare, e.g. mock,anthropic")
+    ev.add_argument(
+        "--compare",
+        help=(
+            "comma-separated providers to compare. Each entry is provider or "
+            "provider:model, e.g. mock,openai_compat:gemini-3.6-flash"
+        ),
+    )
     ev.add_argument(
         "--gate",
         action="store_true",

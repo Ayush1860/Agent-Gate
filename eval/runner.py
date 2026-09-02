@@ -167,6 +167,23 @@ def match_findings(
     return matches, unmatched_findings, missed_defects
 
 
+#: Model to use for a provider named without one. Anything not listed here falls
+#: back to AGENTGATE_MODEL from the environment.
+DEFAULT_MODELS = {"mock": "mock-reviewer-v1"}
+
+
+def parse_provider_spec(spec: str) -> tuple[str, str | None]:
+    """Split ``provider`` or ``provider:model``.
+
+    Split on the *first* colon only, because model ids legitimately contain one
+    (``meta-llama/llama-3.3-70b-instruct:free``).
+    """
+    provider, _, model = spec.strip().partition(":")
+    provider = provider.strip()
+    model = model.strip()
+    return provider, (model or DEFAULT_MODELS.get(provider))
+
+
 # --------------------------------------------------------------------------- #
 # Running
 # --------------------------------------------------------------------------- #
@@ -219,9 +236,12 @@ async def run_eval_async(
     if provider:
         import os
 
-        os.environ["AGENTGATE_PROVIDER"] = provider
         from agentgate import config
 
+        name, model = parse_provider_spec(provider)
+        os.environ["AGENTGATE_PROVIDER"] = name
+        if model:
+            os.environ["AGENTGATE_MODEL"] = model
         config.get_settings.cache_clear()
         llm.reset_provider_cache()
         settings = get_settings()
@@ -384,21 +404,34 @@ def _count_verdicts(runs: list[ModuleRun]) -> dict[str, int]:
 # Provider comparison
 # --------------------------------------------------------------------------- #
 async def compare_providers_async(providers: list[str]) -> dict[str, Any]:
-    """Run the same golden set against several configured providers."""
+    """Run the same golden set against several configured providers.
+
+    Each entry is ``provider`` or ``provider:model``. Naming the model matters:
+    switching provider alone would leave ``AGENTGATE_MODEL`` pointing at the
+    previous provider's model, and the comparison table would mislabel a row.
+    """
     import os
 
     from agentgate import config
 
-    original = os.environ.get("AGENTGATE_PROVIDER", "")
+    original_provider = os.environ.get("AGENTGATE_PROVIDER", "")
+    original_model = os.environ.get("AGENTGATE_MODEL", "")
     results: dict[str, Any] = {}
     try:
-        for name in providers:
-            os.environ["AGENTGATE_PROVIDER"] = name
+        for spec in providers:
+            provider, model = parse_provider_spec(spec)
+            os.environ["AGENTGATE_PROVIDER"] = provider
+            if model:
+                os.environ["AGENTGATE_MODEL"] = model
             config.get_settings.cache_clear()
             llm.reset_provider_cache()
-            results[name] = await run_eval_async()
+            results[spec] = await run_eval_async()
     finally:
-        os.environ["AGENTGATE_PROVIDER"] = original
+        os.environ["AGENTGATE_PROVIDER"] = original_provider
+        if original_model:
+            os.environ["AGENTGATE_MODEL"] = original_model
+        else:
+            os.environ.pop("AGENTGATE_MODEL", None)
         config.get_settings.cache_clear()
         llm.reset_provider_cache()
 
@@ -408,7 +441,8 @@ async def compare_providers_async(providers: list[str]) -> dict[str, Any]:
         "results": results,
         "table": [
             {
-                "provider": name,
+                "provider": report["provider"],
+                "spec": spec,
                 "model": report["model"],
                 "detection_rate": report["metrics"]["detection_rate"],
                 "false_positive_rate": report["metrics"]["false_positive_rate"],
@@ -419,7 +453,7 @@ async def compare_providers_async(providers: list[str]) -> dict[str, Any]:
                 ],
                 "clean_run_fp_count": report["clean_run"]["clean_run_fp_count"],
             }
-            for name, report in results.items()
+            for spec, report in results.items()
         ],
     }
 
