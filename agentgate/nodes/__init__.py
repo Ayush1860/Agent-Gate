@@ -19,7 +19,7 @@ from pydantic import ValidationError
 from .. import llm
 from ..config import PROMPTS_DIR
 from ..models import AgentVerdict, Category, Finding, Severity
-from ..telemetry import BudgetExceeded
+from ..telemetry import BudgetExceeded, mark_node_degraded
 
 log = logging.getLogger("agentgate.nodes")
 
@@ -171,11 +171,9 @@ async def run_specialist(agent: str, payload: str) -> AgentVerdict:
             raise
         except Exception as exc:
             log.error("%s agent call failed: %s", agent, exc)
-            return AgentVerdict(
-                agent=agent,
-                findings=[],
-                notes=f"agent unavailable: {type(exc).__name__}: {exc}",
-            )
+            reason = f"agent unavailable: {type(exc).__name__}: {exc}"
+            mark_node_degraded(reason)
+            return AgentVerdict(agent=agent, findings=[], notes=reason)
 
         try:
             return parse_verdict(agent, response.text)
@@ -183,8 +181,6 @@ async def run_specialist(agent: str, payload: str) -> AgentVerdict:
             log.warning("%s returned unparseable output (attempt %d): %s", agent, attempt, exc)
             repair_note = f"{type(exc).__name__}: {exc}"
 
-    return AgentVerdict(
-        agent=agent,
-        findings=[],
-        notes=f"degraded: output could not be parsed after a repair attempt ({repair_note})",
-    )
+    reason = f"degraded: output could not be parsed after a repair attempt ({repair_note})"
+    mark_node_degraded(reason)
+    return AgentVerdict(agent=agent, findings=[], notes=reason)

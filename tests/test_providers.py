@@ -488,3 +488,128 @@ def test_the_event_loop_is_not_left_running():
     """Guards against a provider leaking an open client into the next test."""
     with pytest.raises(RuntimeError):
         asyncio.get_running_loop()
+
+
+# --------------------------------------------------------------------------- #
+# Retry delay carried in the body rather than the header
+# --------------------------------------------------------------------------- #
+GEMINI_429_BODY = json.dumps(
+    [
+        {
+            "error": {
+                "code": 429,
+                "message": (
+                    "You exceeded your current quota. Quota exceeded for metric: "
+                    "generate_content_free_tier_requests, limit: 20. "
+                    "Please retry in 16.596513187s."
+                ),
+                "status": "RESOURCE_EXHAUSTED",
+                "details": [
+                    {
+                        "@type": "type.googleapis.com/google.rpc.RetryInfo",
+                        "retryDelay": "16s",
+                    }
+                ],
+            }
+        }
+    ]
+)
+
+
+async def test_a_retry_delay_in_the_body_is_honoured_when_there_is_no_header():
+    """Gemini sends no Retry-After header; the wait is only in the JSON body.
+
+    Falling back to exponential backoff there waits ~2s when the server asked for
+    ~17, so all four attempts are burned and the agent degrades for nothing.
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(429, text=GEMINI_429_BODY)
+
+    with pytest.raises(RateLimitError) as excinfo:
+        await _provider(handler).raw_complete(MESSAGES)
+    assert excinfo.value.retry_after == 16.0
+
+
+async def test_the_retry_after_header_still_wins_over_the_body():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(429, headers={"Retry-After": "5"}, text=GEMINI_429_BODY)
+
+    with pytest.raises(RateLimitError) as excinfo:
+        await _provider(handler).raw_complete(MESSAGES)
+    assert excinfo.value.retry_after == 5.0
+
+
+async def test_an_http_date_header_falls_through_to_the_body():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            429,
+            headers={"Retry-After": "Wed, 21 Oct 2026 07:28:00 GMT"},
+            text=GEMINI_429_BODY,
+        )
+
+    with pytest.raises(RateLimitError) as excinfo:
+        await _provider(handler).raw_complete(MESSAGES)
+    assert excinfo.value.retry_after == 16.0
+
+
+async def test_a_body_with_no_delay_leaves_backoff_to_decide():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(429, text="slow down")
+
+    with pytest.raises(RateLimitError) as excinfo:
+        await _provider(handler).raw_complete(MESSAGES)
+    assert excinfo.value.retry_after is None
+
+
+async def test_a_body_delay_paces_the_retry_through_the_shared_path():
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return httpx.Response(429, text=GEMINI_429_BODY)
+        return _ok_response(request)
+
+    delays: list[float] = []
+
+    async def sleeper(seconds: float) -> None:
+        delays.append(seconds)
+
+    await llm.complete(MESSAGES, provider=_provider(handler), sleeper=sleeper)
+    # backoff_max_s (20 by default) caps it; the point is it waited ~16s, not ~0.5s.
+    assert delays == [16.0]
+
+
+# --------------------------------------------------------------------------- #
+# A degraded agent must not look healthy in the trace
+# --------------------------------------------------------------------------- #
+async def test_a_degraded_agent_is_recorded_as_a_failed_node(monkeypatch, tmp_path):
+    """A specialist that loses its provider returns an empty verdict so the review
+    survives. It must still be written to the trace as a failure -- otherwise a run
+    where every agent died looks perfectly healthy on the dashboard."""
+    from agentgate.graph import review_async
+    from agentgate.telemetry import read_traces
+
+    async def dead(messages, **kw):
+        raise TransientError("provider is down")
+
+    monkeypatch.setattr(llm, "complete", dead)
+    result = await review_async(SAMPLE_DIFF, run_id="degraded-trace")
+
+    assert result.errors, "the review should report the degradation"
+    agent_traces = [t for t in read_traces() if t["node"].startswith("agent_")]
+    assert agent_traces
+    assert all(t["success"] is False for t in agent_traces)
+    assert all("provider is down" in (t["error"] or "") for t in agent_traces)
+
+
+async def test_a_healthy_agent_is_still_recorded_as_successful():
+    from agentgate.graph import review_async
+    from agentgate.telemetry import read_traces
+
+    await review_async(SAMPLE_DIFF, run_id="healthy-trace")
+    agent_traces = [t for t in read_traces() if t["node"].startswith("agent_")]
+    assert agent_traces
+    assert all(t["success"] is True for t in agent_traces)
+    assert all(t["error"] is None for t in agent_traces)

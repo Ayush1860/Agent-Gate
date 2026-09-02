@@ -46,6 +46,9 @@ class _NodeUsage:
     retry_count: int = 0
     provider: str = ""
     model: str = ""
+    #: Set by mark_node_degraded(). A node that swallows an error to keep the
+    #: graph alive still has to show up as failed in the trace.
+    error: str | None = None
 
 
 @dataclass
@@ -120,6 +123,18 @@ def record_usage(resp: LLMResponse, cost: float) -> None:
     ctx = _RUN_CTX.get()
     if ctx is not None:
         ctx.charge(resp.total_tokens, cost)
+
+
+def mark_node_degraded(reason: str) -> None:
+    """Record that this node degraded, even though it is returning normally.
+
+    A specialist that loses its provider returns an empty verdict so the review
+    survives. Without this the node is written to the trace as a success, and a
+    run in which every agent failed looks perfectly healthy on the dashboard.
+    """
+    bucket = _NODE_USAGE.get()
+    if bucket is not None and bucket.error is None:
+        bucket.error = reason
 
 
 def write_trace(node_trace: NodeTrace) -> None:
@@ -251,8 +266,8 @@ def _exit(
         output_tokens=bucket.output_tokens,
         cost_usd=round(bucket.cost_usd, 8),
         retry_count=bucket.retry_count,
-        success=error is None,
-        error=f"{type(error).__name__}: {error}" if error else None,
+        success=error is None and bucket.error is None,
+        error=(f"{type(error).__name__}: {error}" if error else bucket.error),
     )
     if ctx is not None:
         ctx.trace.add(nt)

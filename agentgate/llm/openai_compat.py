@@ -7,6 +7,7 @@ Which one you get is decided entirely by ``AGENTGATE_BASE_URL`` / ``AGENTGATE_MO
 
 from __future__ import annotations
 
+import re
 import time
 from typing import Any
 
@@ -17,15 +18,34 @@ from ..models import LLMResponse
 from .base import FatalLLMError, LLMProvider, Message, RateLimitError, TransientError
 
 
-def _retry_after(headers: httpx.Headers) -> float | None:
-    raw = headers.get("retry-after")
-    if not raw:
-        return None
+#: Google returns the wait in the error *body* ("Please retry in 16.59s.") and in a
+#: google.rpc.RetryInfo detail, with no Retry-After header at all. Falling back to
+#: exponential backoff there means waiting ~2s when the server asked for ~17, so
+#: the retries are burned for nothing and the agent degrades.
+_BODY_DELAY_RE = re.compile(r"retry (?:in|after)\s+([0-9]+(?:\.[0-9]+)?)\s*s", re.I)
+_RETRY_DELAY_RE = re.compile(r'"retryDelay"\s*:\s*"([0-9]+(?:\.[0-9]+)?)s"')
+
+
+def _retry_after(response: httpx.Response) -> float | None:
+    """Seconds to wait, from the header if present, otherwise from the body."""
+    raw = response.headers.get("retry-after")
+    if raw:
+        try:
+            return float(raw)
+        except ValueError:
+            # HTTP-date form; not parsed, fall through to the body.
+            pass
+
     try:
-        return float(raw)
-    except ValueError:
-        # HTTP-date form; we do not parse it, the caller falls back to backoff.
+        body = response.text
+    except Exception:  # pragma: no cover - body already consumed or undecodable
         return None
+
+    for pattern in (_RETRY_DELAY_RE, _BODY_DELAY_RE):
+        match = pattern.search(body)
+        if match:
+            return float(match.group(1))
+    return None
 
 
 class OpenAICompatProvider(LLMProvider):
@@ -80,7 +100,7 @@ class OpenAICompatProvider(LLMProvider):
         if resp.status_code == 429:
             raise RateLimitError(
                 f"rate limited by {self.base_url} ({resp.status_code})",
-                retry_after=_retry_after(resp.headers),
+                retry_after=_retry_after(resp),
             )
         if resp.status_code >= 500:
             raise TransientError(f"upstream {resp.status_code} from {self.base_url}")
