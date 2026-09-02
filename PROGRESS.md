@@ -130,3 +130,58 @@ Newest phase at the bottom. Decisions are recorded so a later session can resume
   category gets rewritten), with one exception: `prompt-injection-in-diff` is always security.
 
 ---
+
+## Phase 4 — golden eval suite with 25 seeded defects and provider comparison
+
+**Status:** complete
+
+### Done
+- 10 clean, idiomatic modules in `eval/golden/` (jwt auth, db access, file upload, rate limiter,
+  retry, csv parser, cache, payments, async job queue, config loader), 60–85 lines each.
+- `eval/seed_defects.py` generates `eval/seeded/` **and** `eval/manifest.json` in one pass.
+- Exactly 25 defects: 10 security, 10 correctness, 5 testing; 6 marked `subtle`.
+- `eval/runner.py` — diff generation, greedy closest-line matching, metrics, clean-run pass,
+  `--compare` support. `eval/report.py` — `eval_report.json` + `eval_report.md`.
+- `tests/test_eval.py` (44 tests). **197 tests passing overall.**
+
+### Mock-mode numbers (reproducible: `agentgate eval --provider mock`)
+
+| Metric | Value |
+| --- | --- |
+| Detection rate | **56.0%** (14/25) |
+| False-positive rate | **36.4%** (8/22 findings) |
+| Subtle-defect detection | 33.3% (2/6) |
+| Clean-run false positives | **6** across 10 clean modules |
+| Per-category | security 80%, correctness 40%, testing 40% |
+| p50 / p95 latency | ~150 ms / ~157 ms |
+| Cost per review | $0.00 (mock provider is free by construction) |
+
+### Decisions
+- **Ground truth is generated, never hand-written.** `seed_defects.py` produces the seeded
+  files and the manifest in the same pass, so a line number cannot drift from its defect.
+  A test regenerates the manifest and asserts it equals the copy on disk.
+- **Defect line numbers are resolved by an `anchor` searched *inside the replacement block only*.**
+  A short anchor like `cur = conn.cursor()` appears elsewhere in the file; scoping the search to
+  the block the seeder just wrote makes it unambiguous without inventing artificial markers.
+- **Every defect must land on an *added* line.** A defect created purely by deleting code
+  produces no added lines, so the reviewer would never see it and the measurement would be
+  silently broken. `test_a_manifest_defect_line_survives_into_the_diff` enforces this for all 25.
+- **Matching is greedy by closest line**, one defect per finding and one finding per defect.
+  `cache.py` has two correctness defects 3 lines apart, so nearest-first assignment is what stops
+  a single finding from claiming the wrong one.
+- **Fixed a measurement bug:** the mock looked up ground truth by *basename*, so
+  `eval/golden/cache.py` matched `eval/seeded/cache.py` and the mock "found" seeded defects in
+  the clean modules — 27 fake clean-run FPs. Ground truth now matches on the full path, and a
+  test asserts no seeded rule may ever appear in the clean-run results. Clean FPs dropped to 6,
+  all of them genuinely invented findings.
+- **False positives are decided once per (agent, file), not per line.** A per-line coin flip made
+  the FP count a function of diff size, so the clean run (whole file added) drowned in them.
+  The generator also refuses to land within ±3 lines of a real defect, so an invented finding can
+  never accidentally score as a detection.
+- The 5 testing defects are all `untested-*` rules anchored on newly added branches, which is
+  exactly what the tests agent is told to look for. There is no separate seeded test file — the
+  spec fixes the golden set at 10 source modules.
+- 56% detection is the honest number. It is capped by the mock's deliberate recall gates
+  (security 80%, correctness/testing 60%) and by subtle defects the pattern layer cannot see.
+
+---

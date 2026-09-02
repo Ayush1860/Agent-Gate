@@ -1,0 +1,227 @@
+[
+  {
+    "id": "COR-01",
+    "file": "eval/seeded/jwt_auth.py",
+    "line": 65,
+    "category": "correctness",
+    "rule": "unchecked-none",
+    "description": "A token with no exp claim reaches int(None) and raises TypeError instead of being rejected as expired.",
+    "subtle": false
+  },
+  {
+    "id": "COR-02",
+    "file": "eval/seeded/db_access.py",
+    "line": 72,
+    "category": "correctness",
+    "rule": "unclosed-resource",
+    "description": "The cursor is created outside the context manager and is never closed, leaking a handle on every login.",
+    "subtle": false
+  },
+  {
+    "id": "COR-03",
+    "file": "eval/seeded/file_upload.py",
+    "line": 52,
+    "category": "correctness",
+    "rule": "unclosed-resource",
+    "description": "The upload file handle is opened without a context manager, so it leaks whenever the write raises.",
+    "subtle": false
+  },
+  {
+    "id": "COR-04",
+    "file": "eval/seeded/rate_limiter.py",
+    "line": 41,
+    "category": "correctness",
+    "rule": "unsynchronised-shared-state",
+    "description": "allow() reads and writes the token count without holding the lock, so two threads can both spend the last token.",
+    "subtle": true
+  },
+  {
+    "id": "COR-05",
+    "file": "eval/seeded/rate_limiter.py",
+    "line": 31,
+    "category": "correctness",
+    "rule": "missing-upper-bound-clamp",
+    "description": "Refill is no longer clamped to capacity, so an idle bucket accumulates unlimited tokens and the limit stops applying.",
+    "subtle": true
+  },
+  {
+    "id": "COR-06",
+    "file": "eval/seeded/retry.py",
+    "line": 46,
+    "category": "correctness",
+    "rule": "off-by-one",
+    "description": "The loop runs one more time than the caller asked for, so a 3-attempt policy issues 4 requests.",
+    "subtle": true
+  },
+  {
+    "id": "COR-07",
+    "file": "eval/seeded/retry.py",
+    "line": 49,
+    "category": "correctness",
+    "rule": "swallowed-exception",
+    "description": "A bare except catches everything including CancelledError and discards the original error, so failures are reported without a cause.",
+    "subtle": false
+  },
+  {
+    "id": "COR-08",
+    "file": "eval/seeded/cache.py",
+    "line": 53,
+    "category": "correctness",
+    "rule": "mutable-default-argument",
+    "description": "The default list is created once at definition time, so evicted keys accumulate across every call.",
+    "subtle": false
+  },
+  {
+    "id": "COR-09",
+    "file": "eval/seeded/cache.py",
+    "line": 50,
+    "category": "correctness",
+    "rule": "off-by-one",
+    "description": "The eviction bound uses >= instead of >, so the cache never holds more than capacity - 1 entries.",
+    "subtle": true
+  },
+  {
+    "id": "COR-10",
+    "file": "eval/seeded/job_queue.py",
+    "line": 55,
+    "category": "correctness",
+    "rule": "unawaited-coroutine",
+    "description": "_record is a coroutine but is called without await, so no job result is ever recorded and the coroutine is garbage-collected unrun.",
+    "subtle": false
+  },
+  {
+    "id": "SEC-01",
+    "file": "eval/seeded/jwt_auth.py",
+    "line": 53,
+    "category": "security",
+    "rule": "jwt-signature-not-verified",
+    "description": "decode_token disables signature verification, so any forged token is accepted as authentic.",
+    "subtle": false
+  },
+  {
+    "id": "SEC-02",
+    "file": "eval/seeded/jwt_auth.py",
+    "line": 28,
+    "category": "security",
+    "rule": "hardcoded-secret",
+    "description": "A hardcoded signing key is used when the environment variable is absent, so production silently signs tokens with a public constant.",
+    "subtle": false
+  },
+  {
+    "id": "SEC-03",
+    "file": "eval/seeded/db_access.py",
+    "line": 35,
+    "category": "security",
+    "rule": "sql-string-interpolation",
+    "description": "The email value is interpolated straight into the SQL string instead of being bound as a parameter.",
+    "subtle": false
+  },
+  {
+    "id": "SEC-04",
+    "file": "eval/seeded/db_access.py",
+    "line": 52,
+    "category": "security",
+    "rule": "sql-order-by-injection",
+    "description": "The ORDER BY allow-list check is skipped, so a caller-supplied sort key is interpolated directly into the query.",
+    "subtle": true
+  },
+  {
+    "id": "SEC-05",
+    "file": "eval/seeded/file_upload.py",
+    "line": 50,
+    "category": "security",
+    "rule": "path-traversal",
+    "description": "The raw client filename is joined onto the upload root without containment checks, so ../ escapes the directory.",
+    "subtle": false
+  },
+  {
+    "id": "SEC-06",
+    "file": "eval/seeded/file_upload.py",
+    "line": 12,
+    "category": "security",
+    "rule": "overly-permissive-file-mode",
+    "description": "Uploaded files are written world-writable, letting any local user replace their contents.",
+    "subtle": false
+  },
+  {
+    "id": "SEC-07",
+    "file": "eval/seeded/csv_parser.py",
+    "line": 76,
+    "category": "security",
+    "rule": "unsafe-deserialisation",
+    "description": "The row cache is loaded with pickle, so a tampered cache file executes arbitrary code on read.",
+    "subtle": false
+  },
+  {
+    "id": "SEC-08",
+    "file": "eval/seeded/config_loader.py",
+    "line": 51,
+    "category": "security",
+    "rule": "unsafe-yaml-load",
+    "description": "YAML is parsed with FullLoader instead of safe_load, allowing object construction from a config file.",
+    "subtle": false
+  },
+  {
+    "id": "SEC-09",
+    "file": "eval/seeded/job_queue.py",
+    "line": 73,
+    "category": "security",
+    "rule": "command-injection",
+    "description": "The archive hook builds a shell command by interpolating the archive and destination paths.",
+    "subtle": false
+  },
+  {
+    "id": "SEC-10",
+    "file": "eval/seeded/payments.py",
+    "line": 73,
+    "category": "security",
+    "rule": "predictable-token",
+    "description": "Idempotency keys come from the non-cryptographic random module, making them predictable by an attacker who has seen a few.",
+    "subtle": true
+  },
+  {
+    "id": "TST-01",
+    "file": "eval/seeded/payments.py",
+    "line": 62,
+    "category": "testing",
+    "rule": "untested-new-branch",
+    "description": "A new partial-refund short circuit returns the full charge and no test exercises the new branch.",
+    "subtle": false
+  },
+  {
+    "id": "TST-02",
+    "file": "eval/seeded/rate_limiter.py",
+    "line": 48,
+    "category": "testing",
+    "rule": "untested-new-logic",
+    "description": "A new reset() method mutates bucket state and has no corresponding test.",
+    "subtle": false
+  },
+  {
+    "id": "TST-03",
+    "file": "eval/seeded/config_loader.py",
+    "line": 78,
+    "category": "testing",
+    "rule": "untested-edge-case",
+    "description": "A new worker-count boundary check is added with no test covering the zero or negative case.",
+    "subtle": false
+  },
+  {
+    "id": "TST-04",
+    "file": "eval/seeded/csv_parser.py",
+    "line": 54,
+    "category": "testing",
+    "rule": "untested-error-path",
+    "description": "A new duplicate-header rejection path is added and nothing tests that it raises.",
+    "subtle": false
+  },
+  {
+    "id": "TST-05",
+    "file": "eval/seeded/file_upload.py",
+    "line": 58,
+    "category": "testing",
+    "rule": "untested-new-logic",
+    "description": "A new delete() entry point removes files from disk and has no test at all.",
+    "subtle": false
+  }
+]

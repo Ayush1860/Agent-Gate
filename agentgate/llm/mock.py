@@ -40,6 +40,9 @@ _RECALL_GATE = {
     Category.TESTING: 60,
 }
 
+# Chance, per (agent, file), that the mock invents a plausible but wrong finding.
+_FP_RATE_PERCENT = 22
+
 _AGENT_CATEGORY = {
     "security": Category.SECURITY,
     "correctness": Category.CORRECTNESS,
@@ -64,7 +67,7 @@ _HEURISTICS: dict[Category, list[tuple[re.Pattern[str], str, Severity, str, str]
             "Pass the values as query parameters.",
         ),
         (
-            re.compile(r"\bos\.system\s*\(|shell\s*=\s*True"),
+            re.compile(r"\bos\.system\s*\(|shell\s*=\s*True|create_subprocess_shell\s*\("),
             "command-injection",
             Severity.BLOCKER,
             "A shell command is built from interpolated values.",
@@ -122,7 +125,7 @@ _HEURISTICS: dict[Category, list[tuple[re.Pattern[str], str, Severity, str, str]
             "Default to None and build the container inside the function.",
         ),
         (
-            re.compile(r"except\s*(?:Exception)?\s*:\s*(?:pass\s*)?$"),
+            re.compile(r"^\s*except\s*:\s*$|:\s*pass\s*$"),
             "swallowed-exception",
             Severity.MEDIUM,
             "An exception is caught and discarded, hiding failures.",
@@ -143,7 +146,7 @@ _HEURISTICS: dict[Category, list[tuple[re.Pattern[str], str, Severity, str, str]
             "Await the call, or schedule it explicitly with asyncio.create_task.",
         ),
         (
-            re.compile(r"=\s*open\s*\("),
+            re.compile(r"=\s*(?:\w+\.)?open\s*\("),
             "unclosed-resource",
             Severity.MEDIUM,
             "A file handle is opened without a context manager.",
@@ -164,13 +167,6 @@ _HEURISTICS: dict[Category, list[tuple[re.Pattern[str], str, Severity, str, str]
             Severity.MEDIUM,
             "The assertion is trivially true and can never fail.",
             "Assert on the value actually produced by the code under test.",
-        ),
-        (
-            re.compile(r"def\s+(?:refund|charge|calculate|parse|retry|evict|encode|decode)\w*\s*\("),
-            "untested-new-logic",
-            Severity.LOW,
-            "New branching logic is introduced with no corresponding test.",
-            "Add a unit test covering the new branches, including the failure path.",
         ),
     ],
 }
@@ -260,11 +256,18 @@ def _parse_payload(messages: list[Message]) -> dict[str, list[tuple[int, str]]]:
 
 
 def _gt_for(file: str, category: Category) -> list[dict[str, Any]]:
-    base = file.replace("\\", "/").rsplit("/", 1)[-1]
+    """Ground truth for exactly this path.
+
+    Matched on the full path, not the basename. ``eval/golden/cache.py`` and
+    ``eval/seeded/cache.py`` share a basename but only the seeded copy carries the
+    defects -- matching loosely would make the mock "find" seeded defects in the
+    clean modules and destroy the clean-run false-positive measurement.
+    """
+    path = file.replace("\\", "/")
     return [
         d
         for d in _manifest()
-        if d.get("file", "").replace("\\", "/").rsplit("/", 1)[-1] == base
+        if d.get("file", "").replace("\\", "/") == path
         and d.get("category") == category.value
     ]
 
@@ -330,28 +333,37 @@ def _synthesize(agent: str, files: dict[str, list[tuple[int, str]]]) -> dict[str
                     break
 
         # --- 3. deliberate false positives: plausible, wrong, deterministic ---
-        emitted_fp = 0
-        for line_no, text in lines:
-            if emitted_fp >= 1:
-                break
-            stripped = text.strip()
-            if len(stripped) < 24 or stripped.startswith(("#", '"""', "'''")):
-                continue
-            if _h("fp", agent, file, str(line_no)) % 41 != 0:
-                continue
-            findings.append(
-                {
-                    "file": file,
-                    "line": line_no,
-                    "category": category.value,
-                    "severity": Severity.LOW.value,
-                    "rule": f"possible-{category.value}-concern",
-                    "message": "This line may warrant a second look; the intent is not obvious.",
-                    "suggestion": "Add a clarifying comment or a narrower type.",
-                    "confidence": 0.34,
-                }
-            )
-            emitted_fp += 1
+        # Decided once per (agent, file), not per line. A per-line coin flip would
+        # make the false-positive count a function of how many lines the diff
+        # touches, which turns the clean-run FP number into an artifact of file
+        # size rather than a measurement of the reviewer.
+        if _h("fp", agent, file) % 100 < _FP_RATE_PERCENT:
+            defect_lines = {int(d.get("line", 0)) for d in _gt_for(file, category)}
+            eligible = [
+                (n, t)
+                for n, t in lines
+                if len(t.strip()) >= 24
+                and not t.strip().startswith(("#", '"""', "'''"))
+                # Never land on a real defect -- an accidental hit would count as a
+                # detection rather than the false positive this is meant to be.
+                and all(abs(n - g) > 3 for g in defect_lines)
+            ]
+            if eligible:
+                line_no, _text = eligible[_h("fpline", agent, file) % len(eligible)]
+                findings.append(
+                    {
+                        "file": file,
+                        "line": line_no,
+                        "category": category.value,
+                        "severity": Severity.LOW.value,
+                        "rule": f"possible-{category.value}-concern",
+                        "message": (
+                            "This line may warrant a second look; the intent is not obvious."
+                        ),
+                        "suggestion": "Add a clarifying comment or a narrower type.",
+                        "confidence": 0.34,
+                    }
+                )
 
     # A gated miss stays missed even if a heuristic would otherwise have caught it.
     findings = [f for f in findings if (f["file"], f["line"]) not in suppressed]
