@@ -16,7 +16,7 @@ import logging
 import random
 from typing import Any, Callable
 
-from ..config import cost_usd, get_settings, price_for
+from ..config import cost_usd, get_settings, is_alias, price_for
 from ..models import LLMResponse
 from ..telemetry import current_run, record_retries, record_usage
 from .anthropic import AnthropicProvider
@@ -185,10 +185,18 @@ def _account(prov: LLMProvider, resp: LLMResponse) -> None:
     key = f"{prov.name}:{model}"
     if price_for(prov.name, model) is None and key not in _WARNED_MODELS:
         _WARNED_MODELS.add(key)
-        log.warning(
-            "no price entry for %s; cost will be reported as 0.00 -- "
-            "add it to MODEL_PRICES in agentgate/config.py",
-            key,
-        )
+        if is_alias(model):
+            log.warning(
+                "%s is a moving alias, so it cannot be priced reliably; cost will be "
+                "reported as 0.00. Pin a concrete model id (e.g. gemini-3.5-flash-lite) "
+                "if you need the cost figures.",
+                key,
+            )
+        else:
+            log.warning(
+                "no price entry for %s; cost will be reported as 0.00 -- "
+                "add it to MODEL_PRICES in agentgate/config.py",
+                key,
+            )
     cost = cost_usd(prov.name, model, resp.input_tokens, resp.output_tokens)
     record_usage(resp, cost)

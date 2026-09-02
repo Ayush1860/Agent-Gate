@@ -72,18 +72,21 @@ point — it has the most generous free tier of the presets:
 ```bash
 AGENTGATE_PROVIDER=openai_compat
 AGENTGATE_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai
-AGENTGATE_MODEL=gemini-2.0-flash
+AGENTGATE_MODEL=gemini-3.5-flash-lite
 AGENTGATE_API_KEY=your-key-here
-AGENTGATE_CONCURRENCY=3
+AGENTGATE_CONCURRENCY=1
 ```
 
 `.env.example` also ships presets for **xAI**, **Groq**, **DeepSeek**, **OpenRouter** and
 **Anthropic**.
 
-> **On free tiers, the tokens-per-minute ceiling binds long before token price does.** Three
-> agents fire simultaneously on every review. If a provider throttles hard, lower
-> `AGENTGATE_CONCURRENCY` to `1` before changing anything else. The retry layer will survive a
-> 429; it will not survive an endless one.
+> **On free tiers the request ceiling binds long before token price does — measured, not
+> assumed.** `gemini-3.6-flash`'s free tier is **20 requests**; one review costs 3, so the
+> 20-review eval needs 60 and exhausts it. And a 429 retry *spends another request from the
+> same quota*, so hammering a hard limit delays recovery rather than aiding it. Keep
+> `AGENTGATE_CONCURRENCY=1`, and expect `agentgate eval` to abort cleanly (exit 3) if the
+> quota runs dry. Gemini 3.x also needs `AGENTGATE_MAX_OUTPUT_TOKENS=8000`: reasoning tokens
+> come out of the output budget, and at the 1,400 default the JSON is truncated mid-string.
 
 ### Docker
 
@@ -238,22 +241,56 @@ enforces this, and it caught a real measurement bug during development (see
 
 ### Provider comparison
 
-`agentgate eval --compare a,b` runs the same golden set, the same seeded defects and the same
-matching rules against two configured providers.
+`agentgate eval --compare a,b` runs the same golden set, the same seeded defects and the
+same matching rules against two configured providers. **These are measured, not projected** —
+one full run of each, 20 reviews per provider.
 
-| Provider | Model | Detection | FP rate | Clean FPs | p95 latency | Cost / review | Cost / detected defect |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| `mock` | `mock-reviewer-v1` | 56.0% | 36.4% | 6 | 181 ms | $0.00 | $0.00 |
-| `openai_compat` | `gemini-2.0-flash` | `TODO(live-model)` | `TODO(live-model)` | `TODO(live-model)` | `TODO(live-model)` | `TODO(live-model)` | `TODO(live-model)` |
-| `anthropic` | `claude-haiku-4-5` | `TODO(live-model)` | `TODO(live-model)` | `TODO(live-model)` | `TODO(live-model)` | `TODO(live-model)` | `TODO(live-model)` |
+| | `mock` | `openai_compat` |
+| --- | --- | --- |
+| Model | `mock-reviewer-v1` | `gemini-flash-lite-latest` |
+| **Detection rate** | 56.0% (14/25) | **52.0%** (13/25) |
+| **FP rate on seeded diffs** | 36.4% (8/22) | **18.8%** (3/16) |
+| Clean-run FPs | 6 | 24 |
+| &nbsp;&nbsp;— of which security/correctness | 1 | **0** |
+| Subtle-defect detection | 33.3% (2/6) | 16.7% (1/6) |
+| security | 8/10 | 7/10 |
+| correctness | 4/10 | 3/10 |
+| testing | 2/5 | **3/5** |
+| p50 latency | 389 ms | 3,852 ms |
+| p95 latency | 395 ms | 19,880 ms |
+| Tokens per review | 3,346 | 3,630 (3,411 in / 220 out) |
+| Agent failures | 0/60 | 0/60 (3 rate limits survived by backoff) |
 
-> **CI runs the deterministic mock evaluation on every push.** Live-model numbers cost money and
-> are rate-limited, so they are produced manually and recorded in this table. The `TODO(live-model)`
-> rows are placeholders, not omissions — fill them by configuring a provider in `.env` and running:
->
-> ```bash
-> agentgate eval --compare mock,openai_compat
-> ```
+Reproduce:
+
+```bash
+agentgate eval --compare mock,openai_compat:gemini-3.5-flash-lite
+```
+
+**Reading this table honestly.**
+
+*The mock is not a competitor and its 56% is not a score.* It is seeded from
+`manifest.json` — the answer key — with recall deliberately gated per category. It exists to
+make the harness deterministic and to prove the pipeline end to end at zero cost. Comparing it
+to a real model on detection is apples to oranges, and the fact that it edges out Gemini on
+that one number means nothing.
+
+*The interesting column is precision.* On the seeded diffs Gemini produced roughly half the
+false-positive rate (18.8% vs 36.4%) from fewer, better-targeted findings. On clean, idiomatic
+code it produced **zero** wrong security or correctness findings across all ten modules. For a
+tool that blocks merges, that matters more than raw recall: a gate that cries wolf gets turned
+off.
+
+*The 24 clean-run findings need a caveat, and it is a flaw in my eval rather than in the model.*
+The clean run presents each module as an **entire newly added file**, so all 24 are the tests
+agent saying *"this new code has no accompanying tests"* — 18 of them `untested-error-path`.
+On that diff, that is a **true statement**, not a hallucination. The eval counts it as a false
+positive because no such defect is in the manifest. The report now splits the number by
+category for this reason; the honest precision figure on clean code is the security/correctness
+one, which is 0.
+
+*Latency is the real cost.* Gemini's p95 is **19.9 seconds** against the mock's 395 ms — 50×
+slower, and that is with a lite model. Reasoning tokens are most of it.
 
 ### Matching rules
 
@@ -391,57 +428,72 @@ Stated plainly, because a threat model that claims total coverage is not a threa
 
 ### Measured
 
-The mock provider is free by construction, so the *measured* cost of every number in
-[Results](#results) is **$0.00**. What is genuinely measured is **token volume**, and that is
-what drives cost on any provider:
+Token volume is measured on both providers over the same ten golden modules:
 
-| | Per review (mean over the 10 golden modules) |
-| --- | --- |
-| Input tokens | **3,119** |
-| Output tokens | **228** |
-| Total | **3,346** |
-| LLM calls | 3 (one per specialist, in parallel) |
+| | `mock` | `gemini-flash-lite-latest` |
+| --- | --- | --- |
+| Input tokens / review | 3,119 | **3,411** |
+| Output tokens / review | 228 | **220** |
+| Total / review | 3,346 | **3,630** |
+| LLM calls / review | 3 | 3 |
+| Measured spend | $0.00 (free by construction) | $0.00 (free tier) |
 
-Input dominates by roughly 14:1 — three agents each receive a ~1,000-token system prompt plus the
-diff, and each returns a short JSON verdict. **This is why prompts are capped at ~1,200 tokens
-each**: on this workload, prompt size is the cost driver, not output length.
+Input dominates by roughly **15:1** — three agents each receive a ~1,000-token system prompt
+plus the diff, and each returns a short JSON verdict. **This is why the prompts are capped at
+~1,200 tokens each**: on this workload prompt size is the cost driver, not output length.
+
+One live-only surprise: Gemini 3.x is a *thinking* model, and its reasoning tokens are billed as
+output but reported **only** in `total_tokens`, never in `completion_tokens`. A trivial call
+showed `prompt=18, completion=12, total=173` — 143 invisible billed tokens. AgentGate folds the
+difference into the output count; without that, cost on a reasoning-heavy review is understated
+by roughly an order of magnitude.
 
 ### Projected
 
-Applying the measured token counts to the list prices in `config.py`. These are **projections
-from measured volume, not measured spend** — a live model will emit more output tokens than the
-mock's terse JSON, so treat the output half as a floor:
+Measured token volume × the list prices in `config.py`
+([source](https://ai.google.dev/gemini-api/docs/pricing), checked 2026-09-02). Projections from
+real volume, not guesses about volume:
 
 | Provider / model | Per review | Per 1,000 reviews |
 | --- | --- | --- |
 | `openai_compat:meta-llama/llama-3.3-70b-instruct:free` | $0.000000 | $0.00 |
-| `openai_compat:gemini-2.0-flash` | $0.000403 | **$0.40** |
+| `openai_compat:gemini-2.5-flash-lite` | $0.000429 | **$0.43** |
 | `openai_compat:grok-3-mini` | $0.001050 | $1.05 |
 | `openai_compat:deepseek-chat` | $0.001093 | $1.09 |
-| `openai_compat:gemini-2.5-flash` | $0.001506 | $1.51 |
+| `openai_compat:gemini-3.1-flash-lite` | $0.001183 | $1.18 |
+| `openai_compat:gemini-3.5-flash-lite` | $0.001573 | $1.57 |
 | `openai_compat:llama-3.3-70b-versatile` (Groq) | $0.002020 | $2.02 |
-| `anthropic:claude-haiku-4-5` | $0.004259 | $4.26 |
-| `anthropic:claude-sonnet-5` | $0.012777 | $12.78 |
-| `anthropic:claude-opus-5` | $0.021295 | $21.30 |
+| `openai_compat:gemini-3.6-flash` | $0.003108 | $3.11 |
+| `anthropic:claude-haiku-4-5` | $0.004511 | $4.51 |
+| `anthropic:claude-sonnet-5` | $0.013533 | $13.53 |
+| `anthropic:claude-opus-5` | $0.022555 | $22.56 |
+
+> **AgentGate refuses to price a moving alias.** `gemini-flash-lite-latest` gets $0.00 plus a
+> warning telling you to pin a concrete id, even though its likely target *is* in the table. An
+> alias can be repointed without notice, and a silently wrong cost figure is worse than a loudly
+> absent one in a suite whose entire purpose is making model choice measurable. Pin
+> `gemini-3.5-flash-lite` and the column becomes real.
 
 ### The reasoning behind the model choice
 
-**Default: `gemini-2.0-flash` via the OpenAI-compatible endpoint.**
+**Default: a pinned Gemini Flash-Lite via the OpenAI-compatible endpoint.**
 
-1. **Price is not actually the constraint at this volume.** Even Opus costs ~$21 per thousand
-   reviews. A busy repository might see a few hundred PRs a month. Choosing the cheapest model to
-   save $20/month while losing detection is a bad trade.
-2. **Rate limits *are* the constraint.** Three agents fire simultaneously per review. On a free
-   tier, tokens-per-minute is what breaks first, which is why the concurrency semaphore and the
-   backoff layer are correctness requirements rather than polish. Gemini's free tier is the most
-   forgiving of the presets.
-3. **Which is why the right metric is cost per *detected defect*, not cost per review**, and it
-   is in the comparison table for exactly that reason. A model that costs 10× more but detects
-   twice as many real defects is usually worth it — the expensive thing is the bug that ships, not
-   the tokens.
-4. **So the honest answer is: measure it.** Run `agentgate eval --compare` against two candidates
-   and read the table. That is the whole point of the eval suite, and it is why the live-model
-   rows above are marked `TODO(live-model)` rather than filled in with numbers I have not run.
+1. **Price is not the constraint at this volume.** Even Opus is ~$23 per thousand reviews. A busy
+   repository sees a few hundred PRs a month. Saving $20/month by picking a weaker model is a bad
+   trade against one shipped vulnerability.
+2. **Rate limits are the constraint, and this was measured the hard way.** The free tier for
+   `gemini-3.6-flash` is **20 requests**; one review costs 3, so the 20-review eval needs 60 and
+   exhausts it. Worse, *a 429 retry spends another request from the same quota* — so retrying
+   into a hard limit delays recovery instead of aiding it. That is why the eval now aborts after
+   two consecutive dead reviews rather than grinding for 20 minutes producing nothing.
+3. **Latency, not price, is what you will actually feel.** p95 of **19.9 s** against the mock's
+   395 ms, on a *lite* model. On a PR gate that is acceptable; it would not be inside an IDE.
+4. **The right metric is cost per *detected defect*, not cost per review** — which is why it is a
+   column in the comparison table. A model costing 10× more that finds twice as many real defects
+   is usually worth it.
+5. **So: measure it.** Run `agentgate eval --compare` against two pinned candidates and read the
+   table. That is the entire point of the eval suite, and it is why the numbers above are the ones
+   that came out rather than the ones I would have liked.
 
 ### Spend guards
 
@@ -505,7 +557,7 @@ Configure via repository secrets and variables:
 | `AGENTGATE_API_KEY` | secret | your provider key |
 | `AGENTGATE_PROVIDER` | variable | `openai_compat` |
 | `AGENTGATE_BASE_URL` | variable | `https://generativelanguage.googleapis.com/v1beta/openai` |
-| `AGENTGATE_MODEL` | variable | `gemini-2.0-flash` |
+| `AGENTGATE_MODEL` | variable | `gemini-3.5-flash-lite` (pin it; aliases are not priced) |
 | `AGENTGATE_CONCURRENCY` | variable | `2` |
 
 **`.github/workflows/eval-gate.yml`** — on push and PR. This is the drift gate, and it costs
@@ -539,7 +591,7 @@ Every figure in this README comes from a command you can run. None were typed by
 | The budget aborts instead of overspending | `pytest tests/test_llm.py -k budget -q` |
 | Mean 3,119 in / 228 out tokens per review | `agentgate eval --provider mock` then `GET /metrics`, or the dashboard |
 | Projected per-model costs | measured tokens × `MODEL_PRICES` in `agentgate/config.py` |
-| Provider comparison table | `agentgate eval --compare mock,openai_compat` |
+| Provider comparison table | `agentgate eval --compare mock,openai_compat:gemini-3.5-flash-lite` |
 | Switching provider needs no code change | `pytest tests/test_providers.py -k two_providers -q` |
 
 Full suite:

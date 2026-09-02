@@ -327,3 +327,62 @@ Closing the one Definition-of-Done item that was asserted but never demonstrated
 | `docker compose up` starts API and dashboard | verified; both exercised in a browser |
 | README documents how to reproduce every number | "Reproducing every number" table |
 | `git log` shows at least 7 commits | 8 |
+
+## Live-model run — measured results and what they cost to learn
+
+Ran the golden suite against a real Gemini free-tier key. Seven bugs, none of which the
+mock-mode green board could have surfaced.
+
+### Measured comparison (one full run each, 20 reviews per provider)
+
+| | `mock` | `gemini-flash-lite-latest` |
+| --- | --- | --- |
+| Detection | 56.0% (14/25) | 52.0% (13/25) |
+| FP rate, seeded diffs | 36.4% (8/22) | **18.8%** (3/16) |
+| Clean-run FPs | 6 | 24 |
+| — of which security/correctness | 1 | **0** |
+| Subtle | 33.3% | 16.7% |
+| security / correctness / testing | 8/10, 4/10, 2/5 | 7/10, 3/10, 3/5 |
+| p50 / p95 | 389 / 395 ms | 3,852 / 19,880 ms |
+| Tokens per review | 3,346 | 3,630 (3,411 in / 220 out) |
+| Agent failures | 0/60 | 0/60 (3 rate limits survived by backoff) |
+
+### Bugs found by going live
+
+1. **The test suite was never hermetic.** Module-scoped fixtures initialise before
+   function-scoped ones, so the moment a real `.env` existed, `pytest` called the live API —
+   196s and four failures. Offline pin is now session-scoped, plus a canary fixture.
+2. **Thinking tokens were unbilled.** Gemini reports reasoning tokens only in `total_tokens`
+   (`prompt=18, completion=12, total=173`). Cost was understated ~10x.
+3. **Output budget truncated the JSON.** Reasoning draws from the same budget; at 1,400 the
+   `tests` agent degraded on every review.
+4. **Backoff ignored the real retry delay.** Google sends 429 with no `Retry-After`; the wait is
+   in the body. We waited ~2s when asked for ~17 and burned every attempt.
+5. **A degraded agent was traced as successful.** A run where all three agents died looked
+   healthy on the dashboard.
+6. **Retries were only counted on success.** A call that burned six attempts reported
+   `retry_count=0` — the case where it matters most.
+7. **`--compare` switched provider but not model**, mislabelling rows.
+
+### Design corrections
+
+- **Retrying into a hard quota is self-harm, not resilience.** A 429 retry spends another
+  request from the quota being waited on. The eval now aborts (`ProviderUnavailable`, exit 3)
+  after two consecutive reviews in which every agent degraded, rather than grinding for
+  20 minutes producing numbers that measure the rate limiter.
+- **Aliases are never priced.** `gemini-flash-lite-latest` returns no price plus a warning to
+  pin a concrete id, even though its likely target is in the table. A repointed alias yields a
+  silently wrong cost, which is worse than a loudly absent one.
+- **`MODEL_PRICES` refreshed from Google's published pricing** (checked 2026-09-02), with the
+  retired `gemini-2.0-flash` removed and a note that 3.6/3.7 Flash prices double on 2027-01-01.
+
+### An honest flaw in my own eval
+
+The clean run presents each module as an **entire newly added file**, so all 24 of Gemini's
+clean-run findings are the tests agent correctly observing that new code arrives with no tests
+(18 are `untested-error-path`). On that diff those are *true statements*, counted as false
+positives only because the manifest has no such defect. The report now splits clean-run FPs by
+category: the unambiguous precision number is the security/correctness count, which is **0**.
+
+The mock's 56% is **not** a competing score — it is seeded from the answer key with gated
+recall. It exists to make the harness deterministic at zero cost, not to beat a real model.

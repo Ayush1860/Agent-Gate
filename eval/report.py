@@ -47,6 +47,9 @@ def render_markdown(report: dict[str, Any], comparison: dict[str, Any] | None = 
         f"| Clean-run false positives | **{clean['clean_run_fp_count']}** "
         f"across {clean['modules_reviewed']} clean modules "
         f"({clean['clean_run_fp_per_module']}/module) |",
+        f"| &nbsp;&nbsp;of which security/correctness | "
+        f"**{clean.get('clean_run_fp_excluding_testing', '?')}** "
+        f"(unambiguously wrong; see note below) |",
         f"| Mean cost per review | {_usd(metrics['mean_cost_per_review_usd'])} |",
         f"| Cost per detected defect | {_usd(metrics['cost_per_detected_defect_usd'])} |",
         f"| p50 latency per review | {metrics['p50_latency_ms']:.0f} ms |",
@@ -78,8 +81,12 @@ def render_markdown(report: dict[str, Any], comparison: dict[str, Any] | None = 
         "",
         "## Clean-run false positives",
         "",
-        "The clean modules contain no seeded defects, so every finding below is a pure "
-        "false positive. This is the most honest FP signal in the suite.",
+        "The clean modules contain no seeded defects, so a finding here is a false "
+        "positive. One caveat, stated plainly: the clean run presents each module to "
+        "the reviewer as an **entire newly added file**, so a `testing` finding of the "
+        "form *\"this new code has no tests\"* is a true observation about that diff "
+        "rather than a mistake. Security and correctness findings on clean, idiomatic "
+        "code are unambiguously wrong, and that is the number to judge precision on.",
         "",
     ]
     if clean["by_rule"]:

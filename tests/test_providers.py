@@ -47,7 +47,7 @@ MESSAGES = [
 ]
 
 
-def _provider(handler, model="gemini-2.0-flash") -> OpenAICompatProvider:
+def _provider(handler, model="gemini-3.5-flash-lite") -> OpenAICompatProvider:
     """An openai_compat provider whose transport is a callable, not a socket."""
     provider = OpenAICompatProvider(
         model=model, api_key="test-key", base_url="https://example.invalid/v1"
@@ -64,7 +64,7 @@ def _ok_response(request: httpx.Request) -> httpx.Response:
     return httpx.Response(
         200,
         json={
-            "model": "gemini-2.0-flash",
+            "model": "gemini-3.5-flash-lite",
             "choices": [{"message": {"role": "assistant", "content": VERDICT_JSON}}],
             "usage": {"prompt_tokens": 900, "completion_tokens": 120},
         },
@@ -80,7 +80,7 @@ async def test_a_successful_call_is_parsed_into_an_llm_response():
     assert resp.input_tokens == 900
     assert resp.output_tokens == 120
     assert resp.provider == "openai_compat"
-    assert resp.model == "gemini-2.0-flash"
+    assert resp.model == "gemini-3.5-flash-lite"
     assert resp.latency_ms >= 0
 
 
@@ -92,7 +92,7 @@ async def test_the_request_body_carries_the_configured_model_and_messages():
         return _ok_response(request)
 
     await _provider(handler).raw_complete(MESSAGES)
-    assert seen["model"] == "gemini-2.0-flash"
+    assert seen["model"] == "gemini-3.5-flash-lite"
     assert [m["role"] for m in seen["messages"]] == ["system", "user"]
     assert seen["temperature"] == 0.0
     assert seen["response_format"] == {"type": "json_object"}
@@ -271,8 +271,8 @@ async def test_cost_is_priced_from_the_table_for_a_known_model():
 
     with new_run("cost-check") as ctx:
         await llm.complete(MESSAGES, provider=_provider(_ok_response))
-    # gemini-2.0-flash is (0.10, 0.40) per Mtok: 900 in, 120 out.
-    expected = (900 / 1e6) * 0.10 + (120 / 1e6) * 0.40
+    # gemini-3.5-flash-lite is (0.30, 2.50) per Mtok: 900 in, 120 out.
+    expected = (900 / 1e6) * 0.30 + (120 / 1e6) * 2.50
     assert ctx.cost_usd == pytest.approx(expected, rel=1e-6)
     assert ctx.tokens_consumed == 1020
 

@@ -397,6 +397,16 @@ def summarise(
             "clean_run_fp_per_module": (
                 round(len(clean_findings) / len(clean_runs), 3) if clean_runs else 0.0
             ),
+            # Broken out because the categories are not equally meaningful here. A
+            # clean module is presented to the reviewer as an entire new file, so a
+            # `testing` finding ("this new code has no tests") is a *true*
+            # observation about the diff, not a false positive. Security and
+            # correctness findings on clean, idiomatic code are unambiguously wrong,
+            # and that is the number to judge precision on.
+            "by_category": _count_by(clean_findings, "category"),
+            "clean_run_fp_excluding_testing": sum(
+                1 for f in clean_findings if f.category.value != "testing"
+            ),
             "by_rule": _count_by(clean_findings, "rule"),
         },
         "verdicts": _count_verdicts(seeded_runs),
@@ -416,7 +426,8 @@ def summarise(
 def _count_by(findings: list[Finding], attr: str) -> dict[str, int]:
     out: dict[str, int] = {}
     for finding in findings:
-        key = str(getattr(finding, attr))
+        value = getattr(finding, attr)
+        key = value.value if hasattr(value, "value") else str(value)
         out[key] = out.get(key, 0) + 1
     return dict(sorted(out.items(), key=lambda kv: (-kv[1], kv[0])))
 

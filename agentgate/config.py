@@ -31,9 +31,19 @@ MODEL_PRICES: dict[str, tuple[float, float]] = {
     "anthropic:claude-haiku-4-5-20251001": (1.00, 5.00),
     "anthropic:claude-sonnet-5": (3.00, 15.00),
     "anthropic:claude-opus-5": (5.00, 25.00),
-    # Google Gemini via its OpenAI-compatible endpoint
-    "openai_compat:gemini-2.0-flash": (0.10, 0.40),
+    # Google Gemini via its OpenAI-compatible endpoint.
+    # Source: https://ai.google.dev/gemini-api/docs/pricing (paid tier, text I/O),
+    # checked 2026-09-02. gemini-2.0-flash is deliberately absent: it has been
+    # retired and the API now 404s on it.
+    # NOTE: the 3.6/3.7 Flash prices below are promotional and DOUBLE on
+    # 2027-01-01 (to 1.50 / 7.50). Revisit this table then.
+    "openai_compat:gemini-3.7-flash": (0.75, 3.75),
+    "openai_compat:gemini-3.6-flash": (0.75, 3.75),
+    "openai_compat:gemini-3.5-flash": (1.50, 9.00),
+    "openai_compat:gemini-3.5-flash-lite": (0.30, 2.50),
+    "openai_compat:gemini-3.1-flash-lite": (0.25, 1.50),
     "openai_compat:gemini-2.5-flash": (0.30, 2.50),
+    "openai_compat:gemini-2.5-flash-lite": (0.10, 0.40),
     # xAI
     "openai_compat:grok-3-mini": (0.30, 0.50),
     # Groq
@@ -45,8 +55,26 @@ MODEL_PRICES: dict[str, tuple[float, float]] = {
 }
 
 
+#: Model ids that are moving pointers rather than a fixed model.
+ALIAS_SUFFIXES = ("-latest", "-preview", "-exp")
+
+
+def is_alias(model: str) -> bool:
+    """True for a moving model id such as ``gemini-flash-lite-latest``.
+
+    An alias is never priced, even if today's target is in the table. The alias can
+    be repointed at a different model without notice, and a cost figure that is
+    silently wrong is worse than one that is loudly absent -- especially in a suite
+    whose whole purpose is to make model choice a measured decision. Pin a concrete
+    model id when you care about the cost column.
+    """
+    return model.endswith(ALIAS_SUFFIXES)
+
+
 def price_for(provider: str, model: str) -> tuple[float, float] | None:
-    """Return (input_per_mtok, output_per_mtok) or None when the model is unknown."""
+    """Return (input_per_mtok, output_per_mtok) or None when the model is unpriceable."""
+    if is_alias(model):
+        return None
     return MODEL_PRICES.get(f"{provider}:{model}")
 
 
