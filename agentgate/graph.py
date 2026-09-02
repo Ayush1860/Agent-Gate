@@ -164,7 +164,6 @@ async def review_async(
                 "errors": [],
             }
         )
-        trace = ctx.trace
     wall_ms = int((time.perf_counter() - started) * 1000)
 
     result = ReviewResult(
@@ -176,8 +175,10 @@ async def review_async(
         injection_patterns=state.get("injection_patterns") or [],
         provider=settings.provider,
         model=settings.model,
-        total_tokens=trace.total_tokens,
-        total_cost_usd=trace.total_cost_usd,
+        # Charged by the LLM layer itself, so a call made outside a traced node
+        # still counts. The per-node trace remains the breakdown, not the total.
+        total_tokens=ctx.tokens_consumed,
+        total_cost_usd=round(ctx.cost_usd, 8),
         # Wall clock, not the sum of node durations -- the three specialists
         # overlap, so summing them would overstate how long the review took.
         duration_ms=wall_ms,

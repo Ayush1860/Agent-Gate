@@ -286,3 +286,44 @@ the payload and before/after behaviour, a cost section, CLI/API reference, CI in
 - **239 tests**, passing with no network access and no API key.
 - 7 commits, one per phase.
 - `docker compose up` verified end to end, API and dashboard both exercised.
+
+## Post-phase hardening — live-provider coverage
+
+Closing the one Definition-of-Done item that was asserted but never demonstrated.
+
+### Done
+- `tests/test_providers.py` (29 tests): `openai_compat` driven through an `httpx` mock
+  transport (happy path, request shape, 429 with `Retry-After`, HTTP-date `Retry-After`,
+  5xx vs 4xx classification, timeouts, unparseable bodies), and `anthropic` driven through a
+  stub SDK client (message parsing, out-of-band system prompt, rate-limit mapping).
+- **The `.env`-only provider switch is now demonstrated, not claimed.**
+  `test_the_same_command_runs_against_two_providers_with_no_code_change` runs the identical
+  review twice against a **real localhost HTTP server** speaking the OpenAI-compatible
+  protocol, changing only environment variables. It asserts the second run really used the
+  endpoint (token counts match what the stub returned).
+- **266 tests passing.**
+
+### Decisions
+- **`RunContext` is now the single source of truth for run totals.** Cost was previously
+  summed from `NodeTrace` rows, which are only produced inside a `@traced` node — so a call
+  made outside one was charged tokens but not cost. The LLM layer now charges both to the run
+  context, and the per-node trace remains the *breakdown* rather than the total. Found by a test
+  that called `llm.complete` directly.
+- The `openai_compat` tests inject an `httpx.MockTransport` into the provider's client rather
+  than monkeypatching `httpx.post`, so the real request construction, header and URL logic runs.
+- The provider-switch test uses a real socket rather than a mock transport, because the claim
+  being verified is that *nothing but configuration* changes — a mock transport would be a code
+  change smuggled into the test.
+
+### Definition of done — final verification
+
+| Requirement | Status |
+| --- | --- |
+| `pytest` passes with no network and no API key | 266 passed |
+| `agentgate eval --provider mock` writes real numbers | 56.0% detection, 36.4% FP, 6 clean FPs |
+| Injection fixture detected and returns `block` | verdict `block`, exit code 1 |
+| Provider switch needs only a `.env` edit | verified against a live localhost endpoint |
+| A 429 is survived by backoff | 6 tests, including through the real provider |
+| `docker compose up` starts API and dashboard | verified; both exercised in a browser |
+| README documents how to reproduce every number | "Reproducing every number" table |
+| `git log` shows at least 7 commits | 8 |

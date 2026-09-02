@@ -55,7 +55,11 @@ class RunContext:
     run_id: str
     token_budget: int
     trace: RunTrace
+    #: Run totals, charged by every completed call. Authoritative even for calls
+    #: made outside a ``@traced`` node -- the per-node trace only sees calls that
+    #: happen inside one.
     tokens_consumed: int = 0
+    cost_usd: float = 0.0
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     def check_budget(self, projected: int = 0) -> None:
@@ -68,9 +72,10 @@ class RunContext:
                 f"consumed={self.tokens_consumed:,}, this call would add ~{projected:,}"
             )
 
-    def charge(self, tokens: int) -> None:
+    def charge(self, tokens: int, cost: float = 0.0) -> None:
         with self._lock:
             self.tokens_consumed += tokens
+            self.cost_usd += cost
 
 
 _RUN_CTX: contextvars.ContextVar[RunContext | None] = contextvars.ContextVar(
@@ -114,7 +119,7 @@ def record_usage(resp: LLMResponse, cost: float) -> None:
         bucket.model = resp.model or bucket.model
     ctx = _RUN_CTX.get()
     if ctx is not None:
-        ctx.charge(resp.total_tokens)
+        ctx.charge(resp.total_tokens, cost)
 
 
 def write_trace(node_trace: NodeTrace) -> None:

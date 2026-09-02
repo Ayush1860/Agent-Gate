@@ -540,6 +540,7 @@ Every figure in this README comes from a command you can run. None were typed by
 | Mean 3,119 in / 228 out tokens per review | `agentgate eval --provider mock` then `GET /metrics`, or the dashboard |
 | Projected per-model costs | measured tokens × `MODEL_PRICES` in `agentgate/config.py` |
 | Provider comparison table | `agentgate eval --compare mock,openai_compat` |
+| Switching provider needs no code change | `pytest tests/test_providers.py -k two_providers -q` |
 
 Full suite:
 
@@ -547,7 +548,7 @@ Full suite:
 pytest -q
 ```
 
-**239 tests, no network access, no API key.**
+**266 tests, no network access, no API key.**
 
 ---
 
@@ -579,7 +580,7 @@ eval/
   fixtures/injection.patch
                      (golden/ and seeded/ are review fixtures, not runtime code:
                       they import jwt and yaml and are never executed)
-tests/               239 tests
+tests/               266 tests
 .github/workflows/   review.yml, eval-gate.yml
 ```
 
