@@ -35,13 +35,13 @@ _FENCE_OPEN_RE = re.compile(r"^<<<UNTRUSTED_DIFF_([0-9a-fA-F]+)\s*$")
 
 # Per-category recall ceiling, in percent. Below 100 on purpose -- see module docstring.
 _RECALL_GATE = {
-    Category.SECURITY: 80,
-    Category.CORRECTNESS: 60,
-    Category.TESTING: 60,
+    Category.SECURITY: 97,
+    Category.CORRECTNESS: 85,
+    Category.TESTING: 86,
 }
 
 # Chance, per (agent, file), that the mock invents a plausible but wrong finding.
-_FP_RATE_PERCENT = 22
+_FP_RATE_PERCENT = 10
 
 _AGENT_CATEGORY = {
     "security": Category.SECURITY,
