@@ -600,7 +600,7 @@ Full suite:
 pytest -q
 ```
 
-**266 tests, no network access, no API key.**
+**296 tests, no network access, no API key.**
 
 ---
 
@@ -632,7 +632,7 @@ eval/
   fixtures/injection.patch
                      (golden/ and seeded/ are review fixtures, not runtime code:
                       they import jwt and yaml and are never executed)
-tests/               266 tests
+tests/               296 tests
 .github/workflows/   review.yml, eval-gate.yml
 ```
 
