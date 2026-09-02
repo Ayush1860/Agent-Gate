@@ -486,3 +486,34 @@ def test_retries_are_recorded_even_when_every_attempt_fails(monkeypatch):
 
     entry = [t for t in read_traces() if t["node"] == "agent_security"][-1]
     assert entry["retry_count"] == 3, "four attempts means three retries"
+
+
+def test_each_eval_invocation_uses_unique_run_ids():
+    """Deterministic run ids collide across invocations, and every per-run
+    aggregation (/runs, /runs/{id}, the dashboard's concurrency figure) then spans
+    two separate executions. The dashboard reported -455% saved because of this."""
+    from agentgate.telemetry import read_traces
+    from eval.runner import run_eval
+
+    run_eval(include_clean=False)
+    first = {t["run_id"] for t in read_traces()}
+    run_eval(include_clean=False)
+    all_ids = {t["run_id"] for t in read_traces()}
+    second = all_ids - first
+
+    assert first and second
+    assert not (first & second), "a second eval reused run ids from the first"
+
+
+def test_a_run_id_maps_to_exactly_one_execution_of_each_node():
+    from collections import Counter
+
+    from agentgate.telemetry import read_traces
+    from eval.runner import run_eval
+
+    run_eval(include_clean=False)
+    run_eval(include_clean=False)
+
+    counts = Counter((t["run_id"], t["node"]) for t in read_traces())
+    duplicated = {k: v for k, v in counts.items() if v > 1}
+    assert not duplicated, f"{len(duplicated)} (run_id, node) pairs executed twice"

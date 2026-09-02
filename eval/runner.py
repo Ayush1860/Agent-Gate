@@ -20,6 +20,7 @@ import difflib
 import json
 import statistics
 import time
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -259,6 +260,12 @@ async def run_eval_async(
     if not names:
         raise SystemExit("no golden modules found; nothing to evaluate")
 
+    # One id per eval invocation. Without it the run ids are deterministic
+    # (`eval-mock-cache.py`), so a second eval collides with the first and every
+    # per-run aggregation -- /runs, /runs/{id}, and the dashboard's fan-out
+    # concurrency figure -- silently spans both executions.
+    invocation = uuid.uuid4().hex[:6]
+
     seeded_runs: list[ModuleRun] = []
     clean_runs: list[ModuleRun] = []
     dead_streak = 0
@@ -288,7 +295,8 @@ async def run_eval_async(
             continue
         diff = make_diff(clean_path, seeded_path)
         if diff:
-            run = await _run_one(name, "seeded", diff, f"eval-{settings.provider}-{name}")
+            run_id = f"eval-{settings.provider}-{invocation}-{name}"
+            run = await _run_one(name, "seeded", diff, run_id)
             seeded_runs.append(run)
             _check_alive(run)
 
@@ -298,7 +306,7 @@ async def run_eval_async(
                 name,
                 "clean",
                 make_clean_diff(GOLDEN / name),
-                f"evalclean-{settings.provider}-{name}",
+                f"evalclean-{settings.provider}-{invocation}-{name}",
             )
             clean_runs.append(run)
             _check_alive(run)

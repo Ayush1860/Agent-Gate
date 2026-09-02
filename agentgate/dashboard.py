@@ -191,13 +191,27 @@ if not fan_out.empty:
         include_groups=False,
     )
     if not spans.empty:
-        saved = 1 - (spans["span_ms"].sum() / max(spans["serial_ms"].sum(), 1))
-        st.caption(
-            f"**Fan-out concurrency:** the three specialists took "
-            f"{spans['span_ms'].mean():.0f} ms of wall clock on average against "
-            f"{spans['serial_ms'].mean():.0f} ms of summed agent time — "
-            f"{saved:.0%} saved by running them in parallel."
-        )
+        span_total = spans["span_ms"].sum()
+        serial_total = max(spans["serial_ms"].sum(), 1)
+        saved = 1 - (span_total / serial_total)
+        if saved < 0:
+            # The fan-out cannot take longer than the sum of its parts. Seeing this
+            # means one run_id covers more than one execution, so the span is
+            # measuring the gap between them rather than a single review.
+            st.warning(
+                "Fan-out concurrency could not be computed: the measured span "
+                f"({spans['span_ms'].mean():.0f} ms) exceeds the summed agent time "
+                f"({spans['serial_ms'].mean():.0f} ms), which is impossible for a "
+                "single review. The trace log probably contains duplicate run ids "
+                "from more than one execution."
+            )
+        else:
+            st.caption(
+                f"**Fan-out concurrency:** the three specialists took "
+                f"{spans['span_ms'].mean():.0f} ms of wall clock on average against "
+                f"{spans['serial_ms'].mean():.0f} ms of summed agent time — "
+                f"{saved:.0%} saved by running them in parallel."
+            )
 
 st.bar_chart(latency.set_index("node")["p95"])
 
