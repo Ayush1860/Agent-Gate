@@ -1,7 +1,135 @@
 # AgentGate — Build Progress
 
 Running log of what was built, what was decided, and what remains.
-Newest phase at the bottom. Decisions are recorded so a later session can resume cold.
+Decisions are recorded so a later session can resume cold. The phase-by-phase
+history is at the bottom; **current status and remaining work are here at the top.**
+
+---
+
+## Status: complete and working, with known gaps
+
+**Last updated:** 2026-09-02
+
+| | |
+| --- | --- |
+| Tests | **296 passing**, offline, no API key required (~24s) |
+| Commits | 14 (7 build phases + 7 fixes driven by the live run) |
+| Working tree | clean |
+| Mock-mode eval | 56.0% detection (14/25), 36.4% FP, 6 clean-run FPs |
+| Live eval | Gemini Flash-Lite: 52.0% detection, 18.8% FP, 0 security/correctness clean FPs |
+| Docker | `docker compose up` verified against current source; API + dashboard both serve |
+| CI workflows | written and YAML-valid; **never executed on a real PR** |
+
+### Resuming cold
+
+```bash
+python -m venv .venv && .venv/Scripts/activate     # or source .venv/bin/activate
+pip install -r requirements.txt && pip install -e .
+pytest -q                                          # 296 pass, no key needed
+agentgate eval --provider mock                     # regenerates eval_report.{json,md}
+agentgate review --diff eval/fixtures/injection.patch   # must print block, exit 1
+```
+
+Everything defaults to the offline `mock` provider. A live provider is a `.env` edit;
+`.env.example` carries measured per-provider notes.
+
+---
+
+## What's left to do
+
+Ordered by how much it matters. Items 1 and 2 are the only places where shipped
+behaviour falls short of the spec.
+
+### 1. Enforce `AGENTGATE_TOKEN_BUDGET_PER_EVAL` — *unimplemented*
+
+The spec asks for a token ceiling "per run **and per eval invocation**". The per-run
+budget is enforced (`RunContext.check_budget`, aborts with `BudgetExceeded`). The
+per-eval field exists in `config.py:122` and **is read by nothing** — `grep` returns
+exactly one hit, its own definition.
+
+*Fix:* thread a cumulative counter through `run_eval_async()` that sums
+`ReviewResult.total_tokens` across all 20 reviews and aborts the same way the per-run
+budget does. The abort path already exists (`ProviderUnavailable` is the model to
+follow); this needs the accounting, a message naming budget vs consumed, and a test.
+
+### 2. Test the `--pr` GitHub fetch path — *untested*
+
+`agentgate/cli.py:fetch_pr_diff()` has coverage for the malformed-reference case only.
+The success path, the 404 branch and the auth header have **no test at all**.
+
+*Fix:* an `httpx.MockTransport` test asserting the `Accept:
+application/vnd.github.v3.diff` header, the constructed URL, a 200 returning diff text,
+and the 404/4xx messages. No network needed. This is the same pattern already used in
+`tests/test_providers.py`.
+
+### 3. Run the workflows on a real pull request — *unverified*
+
+`review.yml` and `eval-gate.yml` are written, YAML-validated, and every component they
+invoke is tested locally. Neither has executed inside GitHub Actions. Unknowns:
+the `github-script` comment create/update path, the base-ref diff on a real merge
+commit, and whether `pull-requests: write` is sufficient in practice.
+
+*Fix:* push to a GitHub remote, open a throwaway PR containing
+`eval/fixtures/injection.patch`, confirm one comment appears, push again, confirm the
+comment is *updated* rather than duplicated, and confirm the check fails red.
+
+### 4. Re-run the comparison against a pinned model — *cost column still $0.00*
+
+The measured live run used `gemini-flash-lite-latest`, and AgentGate deliberately
+refuses to price a moving alias, so cost per review and cost per detected defect are
+`$0.00` in the table. `.env` is now pinned to `gemini-3.5-flash-lite`, which *is* priced.
+
+*Fix:* `agentgate eval --compare mock,openai_compat:gemini-3.5-flash-lite`
+(~60 requests, ~10 min, pace it against the free-tier ceiling). Then update the
+README comparison table. Detection/FP should land close to the alias run; the point is
+turning the cost column from absent into measured.
+
+### 5. More than one live run per provider — *n=1*
+
+Every live number comes from a single pass of 20 reviews. Enough to be honest, not
+enough for a confidence interval. Temperature is 0, but these models are not
+bit-deterministic.
+
+*Fix:* three runs per provider, report median and spread. Costs ~180 requests.
+
+### 6. Exercise the `anthropic` provider for real — *stub only*
+
+`AnthropicProvider` is covered by tests against a stubbed SDK client (message parsing,
+out-of-band system prompt, rate-limit mapping). It has never made a real call, so the
+SDK-version assumptions are unverified.
+
+*Fix:* set an Anthropic key in `.env` and run the injection fixture. One review, 3 calls.
+
+### 7. Housekeeping
+
+- **Rotate the Gemini API key.** It was pasted into a chat transcript. `.env` is
+  gitignored and untracked (verified), but the key should be treated as exposed.
+- **Dashboard's eval panel is empty under Docker.** `eval_report.json` is written on the
+  host; the container only mounts the `runs` volume. Either mount the report or run the
+  eval inside the container. The sidebar accepts an arbitrary path, so it is
+  configurable rather than broken.
+- **`MODEL_PRICES` needs a revisit on 2027-01-01.** The `gemini-3.6-flash` and
+  `gemini-3.7-flash` entries are promotional and double on that date; there is a comment
+  in `config.py` saying so.
+
+### Deliberately not done
+
+- **No inline per-line PR comments.** The spec asks for a single formatted comment,
+  updated in place. Inline review comments would need the Reviews API and a mapping from
+  findings to diff positions.
+- **Golden modules are fixtures, not runtime code.** `eval/golden/*.py` import `jwt` and
+  `yaml`, which are not in `requirements.txt`. They are never imported or executed —
+  only diffed as text. Deliberate: adding those deps would imply they run.
+- **The mock provider will never score well on subtle defects.** Its 33% subtle-detection
+  is a pattern-matching ceiling. That is the point of having a live comparison.
+
+---
+
+## Build history
+
+Phase by phase, oldest first. Kept for the decision record.
+**Test counts and commit counts inside this section are accurate as of that phase,**
+not as of now — see the status table at the top for current figures.
 
 ---
 
@@ -281,12 +409,6 @@ the payload and before/after behaviour, a cost section, CLI/API reference, CI in
 
 ---
 
-## Final state
-
-- **239 tests**, passing with no network access and no API key.
-- 7 commits, one per phase.
-- `docker compose up` verified end to end, API and dashboard both exercised.
-
 ## Post-phase hardening — live-provider coverage
 
 Closing the one Definition-of-Done item that was asserted but never demonstrated.
@@ -315,7 +437,9 @@ Closing the one Definition-of-Done item that was asserted but never demonstrated
   being verified is that *nothing but configuration* changes — a mock transport would be a code
   change smuggled into the test.
 
-### Definition of done — final verification
+### Definition of done — verified at this point in the build
+
+*(Historical snapshot. Current status is in the table at the top of this file.)*
 
 | Requirement | Status |
 | --- | --- |
