@@ -174,6 +174,49 @@ def fetch_pr_diff(ref: str, token: str | None = None) -> str:
 
 
 # --------------------------------------------------------------------------- #
+# API key at runtime
+# --------------------------------------------------------------------------- #
+def _providers_needed(args: argparse.Namespace) -> list[str]:
+    """Provider names this command will call. Eval --compare may name several."""
+    compare = getattr(args, "compare", None)
+    if compare:
+        return [p.split(":", 1)[0].strip().lower() for p in compare.split(",") if p.strip()]
+    return [(getattr(args, "provider", None) or get_settings().provider).strip().lower()]
+
+
+def ensure_api_key(args: argparse.Namespace, prompt=None) -> None:
+    """Ask for the key on the terminal instead of reading it from a file.
+
+    The key lives only in this process's environment, so rotating it means
+    pasting the new one next run -- nothing on disk to edit or leak. Prompted
+    when a live provider is used and no key is set, or always with --ask-key.
+    """
+    if args.command not in {"review", "eval", "serve"}:
+        return
+    if all(name == "mock" for name in _providers_needed(args)):
+        return
+    if get_settings().api_key and not getattr(args, "ask_key", False):
+        return
+    if prompt is None:
+        if not sys.stdin.isatty():
+            raise SystemExit(
+                "no API key: set AGENTGATE_API_KEY in the environment "
+                "(CI secret) or run interactively to be prompted"
+            )
+        import getpass
+
+        prompt = getpass.getpass
+    key = prompt("AgentGate API key (input hidden): ").strip()
+    if not key:
+        raise SystemExit("no API key entered")
+    os.environ["AGENTGATE_API_KEY"] = key
+    get_settings.cache_clear()
+    from .llm import reset_provider_cache
+
+    reset_provider_cache()
+
+
+# --------------------------------------------------------------------------- #
 # Commands
 # --------------------------------------------------------------------------- #
 def cmd_review(args: argparse.Namespace) -> int:
@@ -302,6 +345,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "-v", "--verbose", action="store_true", help="log INFO-level progress to stderr"
     )
+    parser.add_argument(
+        "--ask-key",
+        action="store_true",
+        help="prompt for the provider API key (hidden) even if one is configured",
+    )
     sub = parser.add_subparsers(dest="command", required=True)
 
     review = sub.add_parser("review", help="review a unified diff")
@@ -358,6 +406,7 @@ def main(argv: list[str] | None = None) -> int:
         stream=sys.stderr,
     )
     try:
+        ensure_api_key(args)
         return int(args.func(args))
     except BudgetExceeded as exc:
         print(f"aborted: {exc}", file=sys.stderr)

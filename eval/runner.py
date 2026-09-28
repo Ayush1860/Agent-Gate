@@ -239,8 +239,13 @@ async def run_eval_async(
     provider: str | None = None,
     include_clean: bool = True,
     modules: list[str] | None = None,
+    token_budget: int | None = None,
 ) -> dict[str, Any]:
-    """Run the full golden set and return the metrics dictionary."""
+    """Run the full golden set and return the metrics dictionary.
+
+    ``token_budget`` defaults to ``AGENTGATE_TOKEN_BUDGET_PER_EVAL``; the eval
+    aborts with :class:`BudgetExceeded` once the reviews have consumed it.
+    """
     settings = get_settings()
     if provider:
         import os
@@ -269,6 +274,19 @@ async def run_eval_async(
     seeded_runs: list[ModuleRun] = []
     clean_runs: list[ModuleRun] = []
     dead_streak = 0
+    budget = settings.token_budget_per_eval if token_budget is None else token_budget
+    spent = 0
+
+    def _charge(run: ModuleRun) -> None:
+        """The per-run budget caps one review; this caps the whole invocation."""
+        nonlocal spent
+        spent += run.tokens
+        if spent > budget:
+            raise BudgetExceeded(
+                f"eval token budget exceeded: {spent:,} tokens consumed against a "
+                f"budget of {budget:,} (AGENTGATE_TOKEN_BUDGET_PER_EVAL) after "
+                f"{len(seeded_runs) + len(clean_runs)} reviews"
+            )
 
     def _check_alive(run: ModuleRun) -> None:
         """Abort once the provider has clearly stopped answering.
@@ -299,6 +317,7 @@ async def run_eval_async(
             run = await _run_one(name, "seeded", diff, run_id)
             seeded_runs.append(run)
             _check_alive(run)
+            _charge(run)
 
     if include_clean:
         for name in names:
@@ -310,6 +329,7 @@ async def run_eval_async(
             )
             clean_runs.append(run)
             _check_alive(run)
+            _charge(run)
 
     return summarise(settings.provider, settings.model, defects, seeded_runs, clean_runs)
 

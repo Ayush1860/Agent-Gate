@@ -73,8 +73,18 @@ point — it has the most generous free tier of the presets:
 AGENTGATE_PROVIDER=openai_compat
 AGENTGATE_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai
 AGENTGATE_MODEL=gemini-3.5-flash-lite
-AGENTGATE_API_KEY=your-key-here
 AGENTGATE_CONCURRENCY=1
+```
+
+Leave `AGENTGATE_API_KEY` out of the file. When a live provider is configured and no key is
+set, the CLI asks for it with hidden input and holds it only in that process's memory, so
+rotating a key is just pasting the new one next run — nothing on disk to edit or leak.
+`--ask-key` forces the prompt even when a key is configured. In CI, where there is no
+terminal, set `AGENTGATE_API_KEY` from a repository secret.
+
+```bash
+agentgate eval --provider openai_compat          # prompts: AgentGate API key (input hidden)
+agentgate --ask-key review --diff change.patch   # use a freshly rotated key
 ```
 
 `.env.example` also ships presets for **xAI**, **Groq**, **DeepSeek**, **OpenRouter** and
@@ -594,7 +604,7 @@ Full suite:
 pytest -q
 ```
 
-**298 tests, no network access, no API key.**
+**330 tests, no network access, no API key.**
 
 ---
 
@@ -626,7 +636,7 @@ eval/
   fixtures/injection.patch
                      (golden/ and seeded/ are review fixtures, not runtime code:
                       they import jwt and yaml and are never executed)
-tests/               298 tests
+tests/               330 tests
 .github/workflows/   review.yml, eval-gate.yml
 ```
 

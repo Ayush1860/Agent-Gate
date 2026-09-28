@@ -50,7 +50,9 @@ async def parse_diff_node(state: ReviewState) -> dict:
 
 @traced("sanitize")
 async def sanitize_node(state: ReviewState) -> dict:
-    result = sanitize_hunks(state.get("hunks") or [])
+    result = sanitize_hunks(
+        state.get("hunks") or [], max_lines=get_settings().max_diff_lines
+    )
     if result.detected:
         log.warning(
             "prompt injection detected in diff: %s", ", ".join(result.patterns)

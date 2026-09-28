@@ -167,6 +167,35 @@ PATTERNS: list[tuple[str, re.Pattern[str]]] = [
 # Rules detected structurally rather than by the pattern list above.
 _UNICODE_HOMOGLYPH = "unicode-homoglyph"
 _UNICODE_INVISIBLE = "unicode-invisible-characters"
+_OBFUSCATED = "obfuscated-instruction"
+_SPLIT = "split-instruction"
+
+# Evasion by spacing ("i g n o r e") or interleaving ("i#g#n#o#r#e") defeats the
+# word-boundary patterns above. Squeezing a line down to its letters and looking
+# for these compact phrases catches both. Kept to phrases with no plausible
+# legitimate reading once squeezed.
+_SQUEEZED_SIGNATURES = (
+    "ignorepreviousinstruction",
+    "ignoreallpreviousinstruction",
+    "ignoreallinstruction",
+    "ignoretheaboveinstruction",
+    "ignoreallprior",
+    "disregardpreviousinstruction",
+    "disregardallprevious",
+    "forgetpreviousinstruction",
+    "forgetallprevious",
+    "overridethesystemprompt",
+    "approvethispr",
+    "approvethispullrequest",
+    "reportnofindings",
+    "returnnofindings",
+    "donotreportanyfinding",
+)
+_NON_LETTER_RE = re.compile(r"[^a-z]")
+
+# A leading comment marker, so comment lines can be joined back into prose.
+_COMMENT_LEAD_RE = re.compile(r"^\s*(?:#+|//+|/\*+|\*+/?|--+|;+|%+|\"{3}|'{3})\s?")
+_COMMENT_TAIL_RE = re.compile(r"\s*\*/\s*$")
 
 
 @dataclass(frozen=True)
@@ -221,14 +250,74 @@ def scan_line(text: str, file: str = "", line: int = 0) -> list[InjectionMatch]:
         if pattern.search(probe):
             matches.append(InjectionMatch(rule, file, line, _excerpt(text)))
             seen.add(rule)
+    if not matches and _squeezed_match(text):
+        matches.append(InjectionMatch(_OBFUSCATED, file, line, _excerpt(text)))
+    return matches
+
+
+def _squeezed_match(text: str) -> bool:
+    squeezed = _NON_LETTER_RE.sub("", normalise(text).lower())
+    return any(sig in squeezed for sig in _SQUEEZED_SIGNATURES)
+
+
+def _comment_body(text: str) -> str | None:
+    """The prose of a comment line, or ``None`` when the line is not a comment."""
+    if not _COMMENT_LEAD_RE.match(text):
+        return None
+    return _COMMENT_TAIL_RE.sub("", _COMMENT_LEAD_RE.sub("", text, count=1)).strip()
+
+
+def scan_split_comments(
+    lines: list[tuple[int, str]], file: str = "", window: int = 3
+) -> list[InjectionMatch]:
+    """Catch an instruction split across consecutive comment lines.
+
+    Per-line scanning cannot see ``# ignore all previous`` / ``# instructions``.
+    Runs of adjacent comment lines are re-joined into prose and scanned in
+    windows of up to ``window`` lines. Only comments are joined: joining code
+    lines would manufacture phrases nobody wrote.
+    """
+    matches: list[InjectionMatch] = []
+    reported: set[int] = set()
+
+    def scan_run(run: list[tuple[int, str]]) -> None:
+        for start in range(len(run)):
+            for size in range(2, window + 1):
+                chunk = run[start : start + size]
+                if len(chunk) < size:
+                    break
+                if any(no in reported for no, _ in chunk):
+                    continue
+                # Only report what the single lines missed.
+                if any(scan_line(body) for _, body in chunk):
+                    continue
+                joined = " ".join(body for _, body in chunk)
+                if scan_line(joined):
+                    matches.append(InjectionMatch(_SPLIT, file, chunk[0][0], _excerpt(joined)))
+                    reported.update(no for no, _ in chunk)
+
+    run: list[tuple[int, str]] = []
+    prev_no: int | None = None
+    for line_no, text in lines:
+        body = _comment_body(text)
+        contiguous = prev_no is not None and line_no == prev_no + 1
+        if body is None or not contiguous:
+            scan_run(run)
+            run = []
+        if body is not None:
+            run.append((line_no, body))
+        prev_no = line_no
+    scan_run(run)
     return matches
 
 
 def detect(text: str, file: str = "") -> list[InjectionMatch]:
     """Detect over a multi-line blob, attributing each match to its line offset."""
     matches: list[InjectionMatch] = []
-    for offset, raw in enumerate(text.splitlines(), start=1):
+    lines = list(enumerate(text.splitlines(), start=1))
+    for offset, raw in lines:
         matches.extend(scan_line(raw, file=file, line=offset))
+    matches.extend(scan_split_comments(lines, file=file))
     return matches
 
 
@@ -265,24 +354,46 @@ def sanitize(content: str, file: str = "", nonce: str | None = None) -> Sanitize
     )
 
 
-def sanitize_hunks(hunks, nonce: str | None = None) -> SanitizeResult:
+def sanitize_hunks(
+    hunks, nonce: str | None = None, max_lines: int | None = None
+) -> SanitizeResult:
     """Sanitise parsed hunks, keeping real file/line attribution on every match.
 
     Accepts ``list[DiffHunk]``. Returns the payload already rendered in the
     ``FILE:`` / ``<line>| <code>`` format the agent prompts use.
+
+    ``max_lines`` caps how many added lines reach the reviewers, so a huge PR
+    cannot blow the per-run token budget. Injection detection still scans
+    *every* line: truncation must never hide a payload placed past the cap.
     """
     run_nonce = nonce or secrets.token_hex(8)
     matches: list[InjectionMatch] = []
     rendered: list[str] = []
     current: str | None = None
+    emitted = total = 0
+    per_file: dict[str, list[tuple[int, str]]] = {}
 
     for hunk in hunks:
-        if hunk.file != current:
-            current = hunk.file
-            rendered.append(f"FILE: {hunk.file}")
         for line_no, text in hunk.added_lines:
+            total += 1
+            per_file.setdefault(hunk.file, []).append((line_no, text))
             matches.extend(scan_line(text, file=hunk.file, line=line_no))
+            if max_lines is not None and emitted >= max_lines:
+                continue
+            if hunk.file != current:
+                current = hunk.file
+                rendered.append(f"FILE: {hunk.file}")
             rendered.append(f"{line_no}| {neutralise_line(text)}")
+            emitted += 1
+
+    for file, lines in per_file.items():
+        matches.extend(scan_split_comments(lines, file=file))
+
+    if emitted < total:
+        rendered.append(
+            f"[diff truncated: {emitted} of {total} added lines shown; "
+            "review only what is shown]"
+        )
 
     cleaned = "\n".join(rendered)
     return SanitizeResult(

@@ -120,6 +120,9 @@ class Settings(BaseSettings):
     # --- spend guards ---
     token_budget_per_run: int = Field(default=120_000)
     token_budget_per_eval: int = Field(default=2_000_000)
+    max_diff_lines: int = Field(
+        default=600, description="Added lines sent to the reviewers; the rest is truncated."
+    )
 
     # --- review policy ---
     max_findings: int = 20

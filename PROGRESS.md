@@ -12,7 +12,7 @@ history is at the bottom; **current status and remaining work are here at the to
 
 | | |
 | --- | --- |
-| Tests | **296 passing**, offline, no API key required (~24s) |
+| Tests | **330 passing**, offline, no API key required (~24s) |
 | Commits | 14 (7 build phases + 7 fixes driven by the live run) |
 | Working tree | clean |
 | Mock-mode eval | 56.0% detection (14/25), 36.4% FP, 6 clean-run FPs |
@@ -25,7 +25,7 @@ history is at the bottom; **current status and remaining work are here at the to
 ```bash
 python -m venv .venv && .venv/Scripts/activate     # or source .venv/bin/activate
 pip install -r requirements.txt && pip install -e .
-pytest -q                                          # 296 pass, no key needed
+pytest -q                                          # 330 pass, no key needed
 agentgate eval --provider mock                     # regenerates eval_report.{json,md}
 agentgate review --diff eval/fixtures/injection.patch   # must print block, exit 1
 ```
