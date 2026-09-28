@@ -40,7 +40,7 @@ Everything defaults to the offline `mock` provider. A live provider is a `.env` 
 Ordered by how much it matters. Items 1 and 2 are the only places where shipped
 behaviour falls short of the spec.
 
-### 1. Enforce `AGENTGATE_TOKEN_BUDGET_PER_EVAL` — *unimplemented*
+### 1. ~~Enforce `AGENTGATE_TOKEN_BUDGET_PER_EVAL`~~ — *done (dbb1b26)*
 
 The spec asks for a token ceiling "per run **and per eval invocation**". The per-run
 budget is enforced (`RunContext.check_budget`, aborts with `BudgetExceeded`). The
@@ -52,7 +52,7 @@ exactly one hit, its own definition.
 budget does. The abort path already exists (`ProviderUnavailable` is the model to
 follow); this needs the accounting, a message naming budget vs consumed, and a test.
 
-### 2. Test the `--pr` GitHub fetch path — *untested*
+### 2. ~~Test the `--pr` GitHub fetch path~~ — *done (dbb1b26)*
 
 `agentgate/cli.py:fetch_pr_diff()` has coverage for the malformed-reference case only.
 The success path, the 404 branch and the auth header have **no test at all**.
