@@ -209,6 +209,13 @@ def ensure_api_key(args: argparse.Namespace, prompt=None) -> None:
     key = prompt("AgentGate API key (input hidden): ").strip()
     if not key:
         raise SystemExit("no API key entered")
+    # On Windows, Ctrl+V at a hidden prompt records the control character \x16
+    # rather than pasting. Sent as a header, it gets a bare HTML 400 from the API.
+    if not key.isascii() or not key.isprintable() or " " in key:
+        raise SystemExit(
+            "the API key contains control or non-ASCII characters. On Windows, "
+            "Ctrl+V does not paste at a hidden prompt: right-click to paste instead."
+        )
     os.environ["AGENTGATE_API_KEY"] = key
     get_settings.cache_clear()
     from .llm import reset_provider_cache

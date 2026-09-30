@@ -61,3 +61,12 @@ def test_empty_input_aborts(monkeypatch):
 
 def test_dashboard_never_prompts():
     ensure_api_key(_args("dashboard"), prompt=_fail_prompt)
+
+
+@pytest.mark.parametrize("bad", ["\x16", "AIza\x16", "key with space", "kéy"])
+def test_control_or_non_ascii_input_is_rejected(monkeypatch, bad):
+    """Windows Ctrl+V at a hidden prompt yields \x16, not the clipboard."""
+    monkeypatch.setenv("AGENTGATE_API_KEY", "")
+    get_settings.cache_clear()
+    with pytest.raises(SystemExit, match="right-click"):
+        ensure_api_key(_args("eval", "--provider", "openai_compat"), prompt=lambda _m: bad)
