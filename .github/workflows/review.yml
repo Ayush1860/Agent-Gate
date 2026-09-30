@@ -55,7 +55,7 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          git fetch --no-tags --depth=0 origin "$BASE_SHA" "$HEAD_SHA" || true
+          git fetch --no-tags origin "$BASE_SHA" "$HEAD_SHA" || true
           git diff --unified=3 "$BASE_SHA...$HEAD_SHA" > pr.patch
           echo "diff is $(wc -l < pr.patch) lines"
 
@@ -69,7 +69,12 @@ jobs:
           AGENTGATE_BASE_URL: ${{ vars.AGENTGATE_BASE_URL }}
           AGENTGATE_API_KEY: ${{ secrets.AGENTGATE_API_KEY }}
           # Free tiers are rate-limited before they are price-limited.
-          AGENTGATE_CONCURRENCY: ${{ vars.AGENTGATE_CONCURRENCY || '2' }}
+          AGENTGATE_CONCURRENCY: ${{ vars.AGENTGATE_CONCURRENCY || '1' }}
+          # Gemini 3.x spends reasoning tokens from the output budget.
+          AGENTGATE_MAX_OUTPUT_TOKENS: ${{ vars.AGENTGATE_MAX_OUTPUT_TOKENS || '8000' }}
+          AGENTGATE_MAX_ATTEMPTS: ${{ vars.AGENTGATE_MAX_ATTEMPTS || '6' }}
+          AGENTGATE_BACKOFF_MAX_S: ${{ vars.AGENTGATE_BACKOFF_MAX_S || '70' }}
+          AGENTGATE_REQUEST_TIMEOUT_S: ${{ vars.AGENTGATE_REQUEST_TIMEOUT_S || '180' }}
           AGENTGATE_TOKEN_BUDGET_PER_RUN: ${{ vars.AGENTGATE_TOKEN_BUDGET_PER_RUN || '120000' }}
         run: |
           set +e
