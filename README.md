@@ -1,5 +1,9 @@
 # AgentGate
 
+[![Tests and eval drift gate](https://github.com/Ayush1860/Agent-Gate/actions/workflows/eval-gate.yml/badge.svg?branch=main)](https://github.com/Ayush1860/Agent-Gate/actions/workflows/eval-gate.yml)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+
 **A multi-agent AI code reviewer that runs as a CI quality gate on pull requests.**
 
 Three specialist LLM agents review a diff in parallel, an aggregator merges and ranks their
