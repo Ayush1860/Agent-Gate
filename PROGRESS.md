@@ -62,7 +62,7 @@ application/vnd.github.v3.diff` header, the constructed URL, a 200 returning dif
 and the 404/4xx messages. No network needed. This is the same pattern already used in
 `tests/test_providers.py`.
 
-### 3. Run the workflows on a real pull request — *unverified*
+### 3. ~~Run the workflows on a real pull request~~ — *done 2026-09-30: Ayush1860/Agent-Gate#1 blocked with 7 findings, comment posted, check red*
 
 `review.yml` and `eval-gate.yml` are written, YAML-validated, and every component they
 invoke is tested locally. Neither has executed inside GitHub Actions. Unknowns:
