@@ -249,21 +249,28 @@ enforces this.
 same matching rules against two configured providers. **These are measured, not projected** —
 one full run of each, 20 reviews per provider.
 
-| | `mock` | `openai_compat` |
+| | **Gemini 3.5 Flash-Lite** (live) | `mock` (offline harness) |
 | --- | --- | --- |
-| Model | `mock-reviewer-v1` | `gemini-flash-lite-latest` |
-| **Detection rate** | **80.0%** (20/25) | **52.0%** (13/25) |
-| **FP rate on seeded diffs** | **23.1%** (6/26) | **18.8%** (3/16) |
-| Clean-run FPs | 1 | 24 |
-| &nbsp;&nbsp;— of which security/correctness | **0** | **0** |
-| Subtle-defect detection | 66.7% (4/6) | 16.7% (1/6) |
-| security | 9/10 | 7/10 |
-| correctness | 8/10 | 3/10 |
-| testing | 3/5 | **3/5** |
-| p50 latency | 389 ms | 3,852 ms |
-| p95 latency | 397 ms | 19,880 ms |
-| Tokens per review | 3,379 | 3,630 (3,411 in / 220 out) |
-| Agent failures | 0/60 | 0/60 (3 rate limits survived by backoff) |
+| Model | `gemini-3.5-flash-lite` (pinned) | `mock-reviewer-v1` |
+| **Detection rate** | **52.0%** (13/25) | 80.0% (20/25) |
+| **FP rate on seeded diffs** | **18.8%** (3/16) | 23.1% (6/26) |
+| Clean-run FPs | 18 (all `testing`) | 1 |
+| &nbsp;&nbsp;— of which security/correctness | **0** | 0 |
+| Subtle-defect detection | 16.7% (1/6) | 66.7% (4/6) |
+| security | 7/10 | 9/10 |
+| correctness | 3/10 | 8/10 |
+| testing | 3/5 | 3/5 |
+| p50 latency | 8,686 ms | 389 ms |
+| p95 latency | 29,062 ms | 398 ms |
+| Tokens per review | 3,642 | 3,379 |
+| **Cost per review** | **$0.001596** | $0.00 |
+| **Cost per detected defect** | **$0.001227** | $0.00 |
+| Whole eval (20 reviews, 60 calls) | $0.016 | $0.00 |
+| Agent failures | 0/60 (rate limits survived by backoff) | 0/60 |
+
+Measured 2026-09-30 against the pinned model, so the cost column is real rather than projected.
+An earlier run on the moving alias `gemini-flash-lite-latest` gave the same detection and FP
+rate (52.0% / 18.8%), which is some evidence the numbers are stable, though still n=1 per model.
 
 Reproduce:
 
@@ -273,27 +280,27 @@ agentgate eval --compare mock,openai_compat:gemini-3.5-flash-lite
 
 **Reading this table honestly.**
 
-*The mock is not a competitor and its 56% is not a score.* It is seeded from
+*The mock is not a competitor and its 80% is not a score.* It is seeded from
 `manifest.json` — the answer key — with recall deliberately gated per category. It exists to
 make the harness deterministic and to prove the pipeline end to end at zero cost. Comparing it
 to a real model on detection is apples to oranges, and the fact that it edges out Gemini on
-that one number means nothing.
+that one number means nothing; its recall gates were tuned, not earned.
 
 *The interesting column is precision.* On the seeded diffs Gemini produced roughly half the
-false-positive rate (18.8% vs 36.4%) from fewer, better-targeted findings. On clean, idiomatic
+false-positive rate of the mock (18.8% vs 23.1%) from fewer, better-targeted findings. On clean, idiomatic
 code it produced **zero** wrong security or correctness findings across all ten modules. For a
 tool that blocks merges, that matters more than raw recall: a gate that cries wolf gets turned
 off.
 
-*The 24 clean-run findings need a caveat, and it is a flaw in my eval rather than in the model.*
-The clean run presents each module as an **entire newly added file**, so all 24 are the tests
-agent saying *"this new code has no accompanying tests"* — 18 of them `untested-error-path`.
+*The 18 clean-run findings need a caveat, and it is a flaw in my eval rather than in the model.*
+The clean run presents each module as an **entire newly added file**, so all 18 are the tests
+agent saying *"this new code has no accompanying tests"*.
 On that diff, that is a **true statement**, not a hallucination. The eval counts it as a false
 positive because no such defect is in the manifest. The report now splits the number by
 category for this reason; the honest precision figure on clean code is the security/correctness
 one, which is 0.
 
-*Latency is the real cost.* Gemini's p95 is **19.9 seconds** against the mock's 395 ms — 50×
+*Latency is the real cost.* Gemini's p95 is **29.1 seconds** against the mock's 398 ms — 70×
 slower, and that is with a lite model. Reasoning tokens are most of it.
 
 ### Matching rules
@@ -434,13 +441,12 @@ Stated plainly, because a threat model that claims total coverage is not a threa
 
 Token volume is measured on both providers over the same ten golden modules:
 
-| | `mock` | `gemini-flash-lite-latest` |
+| | `mock` | `gemini-3.5-flash-lite` |
 | --- | --- | --- |
-| Input tokens / review | 3,119 | **3,411** |
-| Output tokens / review | 228 | **220** |
-| Total / review | 3,346 | **3,630** |
+| Total tokens / review | 3,379 | **3,642** |
 | LLM calls / review | 3 | 3 |
-| Measured spend | $0.00 (free by construction) | $0.00 (free tier) |
+| Measured cost / review | $0.00 (free by construction) | **$0.001596** |
+| Measured cost / 1,000 reviews | $0.00 | **$1.60** |
 
 Input dominates by roughly **15:1** — three agents each receive a ~1,000-token system prompt
 plus the diff, and each returns a short JSON verdict. **This is why the prompts are capped at
@@ -465,7 +471,7 @@ real volume, not guesses about volume:
 | `openai_compat:grok-3-mini` | $0.001050 | $1.05 |
 | `openai_compat:deepseek-chat` | $0.001093 | $1.09 |
 | `openai_compat:gemini-3.1-flash-lite` | $0.001183 | $1.18 |
-| `openai_compat:gemini-3.5-flash-lite` | $0.001573 | $1.57 |
+| `openai_compat:gemini-3.5-flash-lite` | $0.001573 (measured: $0.001596) | $1.57 |
 | `openai_compat:llama-3.3-70b-versatile` (Groq) | $0.002020 | $2.02 |
 | `openai_compat:gemini-3.6-flash` | $0.003108 | $3.11 |
 | `anthropic:claude-haiku-4-5` | $0.004511 | $4.51 |
@@ -475,8 +481,8 @@ real volume, not guesses about volume:
 > **AgentGate refuses to price a moving alias.** `gemini-flash-lite-latest` gets $0.00 plus a
 > warning telling you to pin a concrete id, even though its likely target *is* in the table. An
 > alias can be repointed without notice, and a silently wrong cost figure is worse than a loudly
-> absent one in a suite whose entire purpose is making model choice measurable. Pin
-> `gemini-3.5-flash-lite` and the column becomes real.
+> absent one in a suite whose entire purpose is making model choice measurable. Pinned to
+> `gemini-3.5-flash-lite`, the measured cost came within 1.5% of the projection above.
 
 ### The reasoning behind the model choice
 

@@ -73,7 +73,7 @@ commit, and whether `pull-requests: write` is sufficient in practice.
 `eval/fixtures/injection.patch`, confirm one comment appears, push again, confirm the
 comment is *updated* rather than duplicated, and confirm the check fails red.
 
-### 4. Re-run the comparison against a pinned model — *cost column still $0.00*
+### 4. ~~Re-run the comparison against a pinned model~~ — *done 2026-09-30: $0.001596/review, 52.0% detection*
 
 The measured live run used `gemini-flash-lite-latest`, and AgentGate deliberately
 refuses to price a moving alias, so cost per review and cost per detected defect are
